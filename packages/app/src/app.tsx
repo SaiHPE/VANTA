@@ -14,13 +14,11 @@ import { CommentsProvider } from "@/context/comments"
 import { FileProvider } from "@/context/file"
 import { GlobalSDKProvider } from "@/context/global-sdk"
 import { GlobalSyncProvider } from "@/context/global-sync"
-import { HighlightsProvider } from "@/context/highlights"
 import { LanguageProvider, useLanguage } from "@/context/language"
 import { LayoutProvider } from "@/context/layout"
 import { ModelsProvider } from "@/context/models"
 import { NotificationProvider } from "@/context/notification"
 import { PermissionProvider } from "@/context/permission"
-import { usePlatform } from "@/context/platform"
 import { PromptProvider } from "@/context/prompt"
 import { type ServerConnection, ServerProvider, useServer } from "@/context/server"
 import { SettingsProvider } from "@/context/settings"
@@ -66,8 +64,7 @@ declare global {
 }
 
 function MarkedProviderWithNativeParser(props: ParentProps) {
-  const platform = usePlatform()
-  return <MarkedProvider nativeParser={platform.parseMarkdown}>{props.children}</MarkedProvider>
+  return <MarkedProvider>{props.children}</MarkedProvider>
 }
 
 function AppShellProviders(props: ParentProps) {
@@ -78,9 +75,7 @@ function AppShellProviders(props: ParentProps) {
           <NotificationProvider>
             <ModelsProvider>
               <CommandProvider>
-                <HighlightsProvider>
-                  <Layout>{props.children}</Layout>
-                </HighlightsProvider>
+                <Layout>{props.children}</Layout>
               </CommandProvider>
             </ModelsProvider>
           </NotificationProvider>

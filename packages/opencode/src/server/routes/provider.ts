@@ -1,21 +1,75 @@
 import { Hono } from "hono"
 import { describeRoute, validator, resolver } from "hono-openapi"
 import z from "zod"
-import { Config } from "../../config/config"
 import { Provider } from "../../provider/provider"
-import { ModelsDev } from "../../provider/models"
-import { ProviderAuth } from "../../provider/auth"
-import { mapValues } from "remeda"
 import { errors } from "../error"
 import { lazy } from "../../util/lazy"
+
+const OllamaModel = z.object({
+  id: z.string(),
+  name: z.string(),
+})
+
+function ollama(input?: string) {
+  const raw = input?.trim() || "http://127.0.0.1:11434"
+  const prefixed = /^https?:\/\//.test(raw) ? raw : `http://${raw}`
+  const parsed = new URL(prefixed)
+  return `${parsed.protocol}//${parsed.host}`
+}
 
 export const ProviderRoutes = lazy(() =>
   new Hono()
     .get(
+      "/ollama/models",
+      describeRoute({
+        summary: "List Ollama models",
+        description: "Fetch the locally available Ollama model list from a running Ollama server.",
+        operationId: "provider.ollama.models",
+        responses: {
+          200: {
+            description: "List of Ollama models",
+            content: {
+              "application/json": {
+                schema: resolver(OllamaModel.array()),
+              },
+            },
+          },
+          ...errors(400),
+        },
+      }),
+      validator(
+        "query",
+        z.object({
+          url: z.string().optional(),
+        }),
+      ),
+      async (c) => {
+        const root = ollama(c.req.valid("query").url)
+        const res = await fetch(`${root}/api/tags`, {
+          signal: AbortSignal.timeout(5_000),
+        })
+        if (!res.ok) throw new Error(`Failed to reach Ollama at ${root}: ${res.status} ${res.statusText}`)
+        const json = (await res.json()) as {
+          models?: Array<{
+            model?: string
+            name?: string
+          }>
+        }
+        const items = (json.models ?? [])
+          .flatMap((item) => {
+            const id = item.model ?? item.name
+            if (!id) return []
+            return [{ id, name: id }]
+          })
+          .sort((a, b) => a.id.localeCompare(b.id))
+        return c.json(items)
+      },
+    )
+    .get(
       "/",
       describeRoute({
         summary: "List providers",
-        description: "Get a list of all available AI providers, including both available and connected ones.",
+        description: "Get the local provider catalog for the web app.",
         operationId: "provider.list",
         responses: {
           200: {
@@ -24,7 +78,7 @@ export const ProviderRoutes = lazy(() =>
               "application/json": {
                 schema: resolver(
                   z.object({
-                    all: ModelsDev.Provider.array(),
+                    all: Provider.Info.array(),
                     default: z.record(z.string(), z.string()),
                     connected: z.array(z.string()),
                   }),
@@ -35,131 +89,18 @@ export const ProviderRoutes = lazy(() =>
         },
       }),
       async (c) => {
-        const config = await Config.get()
-        const disabled = new Set(config.disabled_providers ?? [])
-        const enabled = config.enabled_providers ? new Set(config.enabled_providers) : undefined
-
-        const allProviders = await ModelsDev.get()
-        const filteredProviders: Record<string, (typeof allProviders)[string]> = {}
-        for (const [key, value] of Object.entries(allProviders)) {
-          if ((enabled ? enabled.has(key) : true) && !disabled.has(key)) {
-            filteredProviders[key] = value
-          }
-        }
-
-        const connected = await Provider.list()
-        const providers = Object.assign(
-          mapValues(filteredProviders, (x) => Provider.fromModelsDevProvider(x)),
-          connected,
-        )
+        const items = Object.values(await Provider.list()).filter((item) => item.id === "ollama")
         return c.json({
-          all: Object.values(providers),
-          default: mapValues(providers, (item) => Provider.sort(Object.values(item.models))[0].id),
-          connected: Object.keys(connected),
+          all: items,
+          default: Object.fromEntries(
+            items.flatMap((item) => {
+              const first = Provider.sort(Object.values(item.models))[0]
+              if (!first) return []
+              return [[item.id, first.id]]
+            }),
+          ),
+          connected: items.filter((item) => Object.keys(item.models).length > 0).map((item) => item.id),
         })
-      },
-    )
-    .get(
-      "/auth",
-      describeRoute({
-        summary: "Get provider auth methods",
-        description: "Retrieve available authentication methods for all AI providers.",
-        operationId: "provider.auth",
-        responses: {
-          200: {
-            description: "Provider auth methods",
-            content: {
-              "application/json": {
-                schema: resolver(z.record(z.string(), z.array(ProviderAuth.Method))),
-              },
-            },
-          },
-        },
-      }),
-      async (c) => {
-        return c.json(await ProviderAuth.methods())
-      },
-    )
-    .post(
-      "/:providerID/oauth/authorize",
-      describeRoute({
-        summary: "OAuth authorize",
-        description: "Initiate OAuth authorization for a specific AI provider to get an authorization URL.",
-        operationId: "provider.oauth.authorize",
-        responses: {
-          200: {
-            description: "Authorization URL and method",
-            content: {
-              "application/json": {
-                schema: resolver(ProviderAuth.Authorization.optional()),
-              },
-            },
-          },
-          ...errors(400),
-        },
-      }),
-      validator(
-        "param",
-        z.object({
-          providerID: z.string().meta({ description: "Provider ID" }),
-        }),
-      ),
-      validator(
-        "json",
-        z.object({
-          method: z.number().meta({ description: "Auth method index" }),
-        }),
-      ),
-      async (c) => {
-        const providerID = c.req.valid("param").providerID
-        const { method } = c.req.valid("json")
-        const result = await ProviderAuth.authorize({
-          providerID,
-          method,
-        })
-        return c.json(result)
-      },
-    )
-    .post(
-      "/:providerID/oauth/callback",
-      describeRoute({
-        summary: "OAuth callback",
-        description: "Handle the OAuth callback from a provider after user authorization.",
-        operationId: "provider.oauth.callback",
-        responses: {
-          200: {
-            description: "OAuth callback processed successfully",
-            content: {
-              "application/json": {
-                schema: resolver(z.boolean()),
-              },
-            },
-          },
-          ...errors(400),
-        },
-      }),
-      validator(
-        "param",
-        z.object({
-          providerID: z.string().meta({ description: "Provider ID" }),
-        }),
-      ),
-      validator(
-        "json",
-        z.object({
-          method: z.number().meta({ description: "Auth method index" }),
-          code: z.string().optional().meta({ description: "OAuth authorization code" }),
-        }),
-      ),
-      async (c) => {
-        const providerID = c.req.valid("param").providerID
-        const { method, code } = c.req.valid("json")
-        await ProviderAuth.callback({
-          providerID,
-          method,
-          code,
-        })
-        return c.json(true)
       },
     ),
 )

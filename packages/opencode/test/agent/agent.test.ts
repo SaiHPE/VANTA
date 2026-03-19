@@ -19,6 +19,7 @@ test("returns default native agents when no config", async () => {
       const agents = await Agent.list()
       const names = agents.map((a) => a.name)
       expect(names).toContain("build")
+      expect(names).toContain("execute")
       expect(names).toContain("plan")
       expect(names).toContain("general")
       expect(names).toContain("explore")
@@ -124,7 +125,7 @@ test("custom agent from config creates new agent", async () => {
     config: {
       agent: {
         my_custom_agent: {
-          model: "openai/gpt-4",
+          model: "ollama/qwen3:8b",
           description: "My custom agent",
           temperature: 0.5,
           top_p: 0.9,
@@ -137,8 +138,8 @@ test("custom agent from config creates new agent", async () => {
     fn: async () => {
       const custom = await Agent.get("my_custom_agent")
       expect(custom).toBeDefined()
-      expect(custom?.model?.providerID).toBe("openai")
-      expect(custom?.model?.modelID).toBe("gpt-4")
+      expect(custom?.model?.providerID).toBe("ollama")
+      expect(custom?.model?.modelID).toBe("qwen3:8b")
       expect(custom?.description).toBe("My custom agent")
       expect(custom?.temperature).toBe(0.5)
       expect(custom?.topP).toBe(0.9)
@@ -153,7 +154,7 @@ test("custom agent config overrides native agent properties", async () => {
     config: {
       agent: {
         build: {
-          model: "anthropic/claude-3",
+          model: "ollama/llama3.2",
           description: "Custom build agent",
           temperature: 0.7,
           color: "#FF0000",
@@ -166,8 +167,8 @@ test("custom agent config overrides native agent properties", async () => {
     fn: async () => {
       const build = await Agent.get("build")
       expect(build).toBeDefined()
-      expect(build?.model?.providerID).toBe("anthropic")
-      expect(build?.model?.modelID).toBe("claude-3")
+      expect(build?.model?.providerID).toBe("ollama")
+      expect(build?.model?.modelID).toBe("llama3.2")
       expect(build?.description).toBe("Custom build agent")
       expect(build?.temperature).toBe(0.7)
       expect(build?.color).toBe("#FF0000")

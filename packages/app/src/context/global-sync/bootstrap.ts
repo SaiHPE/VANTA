@@ -1,13 +1,12 @@
 import type {
   Config,
-  OpencodeClient,
   Path,
   PermissionRequest,
   Project,
-  ProviderAuthResponse,
   ProviderListResponse,
   QuestionRequest,
   Todo,
+  VmSummary,
 } from "@opencode-ai/sdk/v2/client"
 import { showToast } from "@opencode-ai/ui/toast"
 import { getFilename } from "@opencode-ai/util/path"
@@ -17,6 +16,7 @@ import { reconcile, type SetStoreFunction, type Store } from "solid-js/store"
 import type { State, VcsCache } from "./types"
 import { cmp, normalizeProviderList } from "./utils"
 import { formatServerError } from "@/utils/server-errors"
+import { createSdkForServer } from "@/utils/server"
 
 type GlobalStore = {
   ready: boolean
@@ -26,13 +26,14 @@ type GlobalStore = {
     [sessionID: string]: Todo[]
   }
   provider: ProviderListResponse
-  provider_auth: ProviderAuthResponse
   config: Config
   reload: undefined | "pending" | "complete"
 }
 
+type Client = ReturnType<typeof createSdkForServer>
+
 export async function bootstrapGlobal(input: {
-  globalSDK: OpencodeClient
+  globalSDK: Client
   connectErrorTitle: string
   connectErrorDescription: string
   requestFailedTitle: string
@@ -42,7 +43,7 @@ export async function bootstrapGlobal(input: {
 }) {
   const health = await input.globalSDK.global
     .health()
-    .then((x) => x.data)
+    .then((x: { data?: { healthy?: boolean } }) => x.data)
     .catch(() => undefined)
   if (!health?.healthy) {
     showToast({
@@ -56,19 +57,19 @@ export async function bootstrapGlobal(input: {
 
   const tasks = [
     retry(() =>
-      input.globalSDK.path.get().then((x) => {
+      input.globalSDK.path.get().then((x: { data?: Path }) => {
         input.setGlobalStore("path", x.data!)
       }),
     ),
     retry(() =>
-      input.globalSDK.global.config.get().then((x) => {
+      input.globalSDK.global.config.get().then((x: { data?: Config }) => {
         input.setGlobalStore("config", x.data!)
       }),
     ),
     retry(() =>
-      input.globalSDK.project.list().then((x) => {
+      input.globalSDK.project.list().then((x: { data?: Project[] }) => {
         const projects = (x.data ?? [])
-          .filter((p) => !!p?.id)
+          .filter((p): p is Project => !!p?.id)
           .filter((p) => !!p.worktree && !p.worktree.includes("opencode-test"))
           .slice()
           .sort((a, b) => cmp(a.id, b.id))
@@ -76,13 +77,8 @@ export async function bootstrapGlobal(input: {
       }),
     ),
     retry(() =>
-      input.globalSDK.provider.list().then((x) => {
+      input.globalSDK.provider.list().then((x: { data?: ProviderListResponse }) => {
         input.setGlobalStore("provider", normalizeProviderList(x.data!))
-      }),
-    ),
-    retry(() =>
-      input.globalSDK.provider.auth().then((x) => {
-        input.setGlobalStore("provider_auth", x.data ?? {})
       }),
     ),
   ]
@@ -113,7 +109,7 @@ function groupBySession<T extends { id: string; sessionID: string }>(input: T[])
 
 export async function bootstrapDirectory(input: {
   directory: string
-  sdk: OpencodeClient
+  sdk: Client
   store: Store<State>
   setStore: SetStoreFunction<State>
   vcsCache: VcsCache
@@ -123,13 +119,13 @@ export async function bootstrapDirectory(input: {
   if (input.store.status !== "complete") input.setStore("status", "loading")
 
   const blockingRequests = {
-    project: () => input.sdk.project.current().then((x) => input.setStore("project", x.data!.id)),
+    project: () => input.sdk.project.current().then((x: { data?: Project }) => input.setStore("project", x.data!.id)),
     provider: () =>
-      input.sdk.provider.list().then((x) => {
+      input.sdk.provider.list().then((x: { data?: ProviderListResponse }) => {
         input.setStore("provider", normalizeProviderList(x.data!))
       }),
-    agent: () => input.sdk.app.agents().then((x) => input.setStore("agent", x.data ?? [])),
-    config: () => input.sdk.config.get().then((x) => input.setStore("config", x.data!)),
+    agent: () => input.sdk.app.agents().then((x: { data?: State["agent"] }) => input.setStore("agent", x.data ?? [])),
+    config: () => input.sdk.config.get().then((x: { data?: Config }) => input.setStore("config", x.data!)),
   }
 
   try {
@@ -149,20 +145,31 @@ export async function bootstrapDirectory(input: {
   if (input.store.status !== "complete") input.setStore("status", "partial")
 
   Promise.all([
-    input.sdk.path.get().then((x) => input.setStore("path", x.data!)),
-    input.sdk.command.list().then((x) => input.setStore("command", x.data ?? [])),
-    input.sdk.session.status().then((x) => input.setStore("session_status", x.data!)),
+    input.sdk.path.get().then((x: { data?: Path }) => input.setStore("path", x.data!)),
+    input.sdk.command.list().then((x: { data?: State["command"] }) => input.setStore("command", x.data ?? [])),
+    input.sdk.session.status().then((x: { data?: State["session_status"] }) => input.setStore("session_status", x.data!)),
     input.loadSessions(input.directory),
-    input.sdk.mcp.status().then((x) => input.setStore("mcp", x.data!)),
-    input.sdk.lsp.status().then((x) => input.setStore("lsp", x.data!)),
-    input.sdk.vcs.get().then((x) => {
+    input.sdk.mcp.status().then((x: { data?: State["mcp"] }) => input.setStore("mcp", x.data!)),
+    input.sdk.lsp.status().then((x: { data?: State["lsp"] }) => input.setStore("lsp", x.data!)),
+    input.sdk.vm.list().then((x: { data?: VmSummary[] }) => {
+      input.setStore(
+        "vm",
+        reconcile((x.data ?? []).filter((item): item is VmSummary => !!item?.id).sort((a, b) => cmp(a.id, b.id)), {
+          key: "id",
+        }),
+      )
+    }),
+    input.sdk.vcs.get().then((x: { data?: State["vcs"] }) => {
       const next = x.data ?? input.store.vcs
       input.setStore("vcs", next)
       if (next?.branch) input.vcsCache.setStore("value", next)
     }),
-    input.sdk.permission.list().then((x) => {
+    input.sdk.permission.list().then((x: { data?: PermissionRequest[] }) => {
       const grouped = groupBySession(
-        (x.data ?? []).filter((perm): perm is PermissionRequest => !!perm?.id && !!perm.sessionID),
+        (x.data ?? []).filter(
+          (perm): perm is PermissionRequest =>
+            !!perm?.id && !!perm.sessionID && !!perm.permission && Array.isArray(perm.patterns),
+        ),
       )
       batch(() => {
         for (const sessionID of Object.keys(input.store.permission)) {
@@ -174,15 +181,17 @@ export async function bootstrapDirectory(input: {
             "permission",
             sessionID,
             reconcile(
-              permissions.filter((p) => !!p?.id).sort((a, b) => cmp(a.id, b.id)),
+              permissions.sort((a, b) => cmp(a.id, b.id)),
               { key: "id" },
             ),
           )
         }
       })
     }),
-    input.sdk.question.list().then((x) => {
-      const grouped = groupBySession((x.data ?? []).filter((q): q is QuestionRequest => !!q?.id && !!q.sessionID))
+    input.sdk.question.list().then((x: { data?: QuestionRequest[] }) => {
+      const grouped = groupBySession(
+        (x.data ?? []).filter((q): q is QuestionRequest => !!q?.id && !!q.sessionID && Array.isArray(q.questions)),
+      )
       batch(() => {
         for (const sessionID of Object.keys(input.store.question)) {
           if (grouped[sessionID]) continue
@@ -193,7 +202,7 @@ export async function bootstrapDirectory(input: {
             "question",
             sessionID,
             reconcile(
-              questions.filter((q) => !!q?.id).sort((a, b) => cmp(a.id, b.id)),
+              questions.sort((a, b) => cmp(a.id, b.id)),
               { key: "id" },
             ),
           )

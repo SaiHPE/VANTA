@@ -1,7 +1,7 @@
 import { BusEvent } from "@/bus/bus-event"
 import z from "zod"
 import { NamedError } from "@opencode-ai/util/error"
-import { APICallError, convertToModelMessages, LoadAPIKeyError, type ModelMessage, type UIMessage } from "ai"
+import { APICallError, convertToModelMessages, type ModelMessage, type UIMessage } from "ai"
 import { Identifier } from "../id/id"
 import { LSP } from "../lsp"
 import { Snapshot } from "@/snapshot"
@@ -28,13 +28,6 @@ export namespace MessageV2 {
     z.object({
       message: z.string(),
       retries: z.number(),
-    }),
-  )
-  export const AuthError = NamedError.create(
-    "ProviderAuthError",
-    z.object({
-      providerID: z.string(),
-      message: z.string(),
     }),
   )
   export const APIError = NamedError.create(
@@ -401,7 +394,6 @@ export namespace MessageV2 {
     }),
     error: z
       .discriminatedUnion("name", [
-        AuthError.Schema,
         NamedError.Unknown.Schema,
         OutputLengthError.Schema,
         AbortedError.Schema,
@@ -500,26 +492,7 @@ export namespace MessageV2 {
   ): ModelMessage[] {
     const result: UIMessage[] = []
     const toolNames = new Set<string>()
-    // Track media from tool results that need to be injected as user messages
-    // for providers that don't support media in tool results.
-    //
-    // OpenAI-compatible APIs only support string content in tool results, so we need
-    // to extract media and inject as user messages. Other SDKs (anthropic, google,
-    // bedrock) handle type: "content" with media parts natively.
-    //
-    // Only apply this workaround if the model actually supports image input -
-    // otherwise there's no point extracting images.
-    const supportsMediaInToolResults = (() => {
-      if (model.api.npm === "@ai-sdk/anthropic") return true
-      if (model.api.npm === "@ai-sdk/openai") return true
-      if (model.api.npm === "@ai-sdk/amazon-bedrock") return true
-      if (model.api.npm === "@ai-sdk/google-vertex/anthropic") return true
-      if (model.api.npm === "@ai-sdk/google") {
-        const id = model.api.id.toLowerCase()
-        return id.includes("gemini-3") && !id.includes("gemini-2")
-      }
-      return false
-    })()
+    const supportsMediaInToolResults = false
 
     const toModelOutput = (output: unknown) => {
       if (typeof output === "string") {
@@ -835,14 +808,6 @@ export namespace MessageV2 {
         ).toObject()
       case MessageV2.OutputLengthError.isInstance(e):
         return e
-      case LoadAPIKeyError.isInstance(e):
-        return new MessageV2.AuthError(
-          {
-            providerID: ctx.providerID,
-            message: e.message,
-          },
-          { cause: e },
-        ).toObject()
       case (e as SystemError)?.code === "ECONNRESET":
         return new MessageV2.APIError(
           {

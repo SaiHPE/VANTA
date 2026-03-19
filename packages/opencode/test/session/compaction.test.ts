@@ -6,7 +6,7 @@ import { Instance } from "../../src/project/instance"
 import { Log } from "../../src/util/log"
 import { tmpdir } from "../fixture/fixture"
 import { Session } from "../../src/session"
-import type { Provider } from "../../src/provider/provider"
+import { Provider } from "../../src/provider/provider"
 
 Log.init({ print: false })
 
@@ -17,7 +17,7 @@ function createModel(opts: {
   cost?: Provider.Model["cost"]
   npm?: string
 }): Provider.Model {
-  return {
+  return Provider.Model.parse({
     id: "test-model",
     providerID: "test",
     name: "Test",
@@ -32,12 +32,17 @@ function createModel(opts: {
       attachment: false,
       reasoning: false,
       temperature: true,
-      input: { text: true, image: false, audio: false, video: false },
-      output: { text: true, image: false, audio: false, video: false },
+      input: { text: true, image: false, audio: false, video: false, pdf: false },
+      output: { text: true, image: false, audio: false, video: false, pdf: false },
+      interleaved: false,
     },
-    api: { npm: opts.npm ?? "@ai-sdk/anthropic" },
+    api: { id: "test-model", npm: opts.npm ?? "@ai-sdk/openai-compatible" },
     options: {},
-  } as Provider.Model
+    status: "active",
+    family: "test",
+    release_date: "",
+    variants: {},
+  })
 }
 
 describe("session.compaction.isOverflow", () => {
@@ -278,44 +283,6 @@ describe("session.getUsage", () => {
     expect(result.tokens.cache.read).toBe(200)
   })
 
-  test("handles anthropic cache write metadata", () => {
-    const model = createModel({ context: 100_000, output: 32_000 })
-    const result = Session.getUsage({
-      model,
-      usage: {
-        inputTokens: 1000,
-        outputTokens: 500,
-        totalTokens: 1500,
-      },
-      metadata: {
-        anthropic: {
-          cacheCreationInputTokens: 300,
-        },
-      },
-    })
-
-    expect(result.tokens.cache.write).toBe(300)
-  })
-
-  test("does not subtract cached tokens for anthropic provider", () => {
-    const model = createModel({ context: 100_000, output: 32_000 })
-    const result = Session.getUsage({
-      model,
-      usage: {
-        inputTokens: 1000,
-        outputTokens: 500,
-        totalTokens: 1500,
-        cachedInputTokens: 200,
-      },
-      metadata: {
-        anthropic: {},
-      },
-    })
-
-    expect(result.tokens.input).toBe(1000)
-    expect(result.tokens.cache.read).toBe(200)
-  })
-
   test("handles reasoning tokens", () => {
     const model = createModel({ context: 100_000, output: 32_000 })
     const result = Session.getUsage({
@@ -372,52 +339,4 @@ describe("session.getUsage", () => {
     expect(result.cost).toBe(3 + 1.5)
   })
 
-  test.each(["@ai-sdk/anthropic", "@ai-sdk/amazon-bedrock", "@ai-sdk/google-vertex/anthropic"])(
-    "computes total from components for %s models",
-    (npm) => {
-      const model = createModel({ context: 100_000, output: 32_000, npm })
-      const usage = {
-        inputTokens: 1000,
-        outputTokens: 500,
-        // These providers typically report total as input + output only,
-        // excluding cache read/write.
-        totalTokens: 1500,
-        cachedInputTokens: 200,
-      }
-      if (npm === "@ai-sdk/amazon-bedrock") {
-        const result = Session.getUsage({
-          model,
-          usage,
-          metadata: {
-            bedrock: {
-              usage: {
-                cacheWriteInputTokens: 300,
-              },
-            },
-          },
-        })
-
-        expect(result.tokens.input).toBe(1000)
-        expect(result.tokens.cache.read).toBe(200)
-        expect(result.tokens.cache.write).toBe(300)
-        expect(result.tokens.total).toBe(2000)
-        return
-      }
-
-      const result = Session.getUsage({
-        model,
-        usage,
-        metadata: {
-          anthropic: {
-            cacheCreationInputTokens: 300,
-          },
-        },
-      })
-
-      expect(result.tokens.input).toBe(1000)
-      expect(result.tokens.cache.read).toBe(200)
-      expect(result.tokens.cache.write).toBe(300)
-      expect(result.tokens.total).toBe(2000)
-    },
-  )
 })

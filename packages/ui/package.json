@@ -17,7 +17,6 @@
     "./theme": "./src/theme/index.ts",
     "./theme/*": "./src/theme/*.ts",
     "./theme/context": "./src/theme/context.tsx",
-    "./icons/provider": "./src/components/provider-icons/types.ts",
     "./icons/file-type": "./src/components/file-icons/types.ts",
     "./icons/app": "./src/components/app-icons/types.ts",
     "./fonts/*": "./src/assets/fonts/*",

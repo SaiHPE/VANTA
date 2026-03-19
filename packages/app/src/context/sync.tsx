@@ -108,6 +108,8 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
     const inflight = new Map<string, Promise<void>>()
     const inflightDiff = new Map<string, Promise<void>>()
     const inflightTodo = new Map<string, Promise<void>>()
+    const inflightVm = new Map<string, Promise<void>>()
+    const inflightVmActivity = new Map<string, Promise<void>>()
     const [meta, setMeta] = createStore({
       limit: {} as Record<string, number>,
       complete: {} as Record<string, boolean>,
@@ -346,6 +348,32 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
             produce((draft) => {
               const match = Binary.search(draft.session, sessionID, (s) => s.id)
               if (match.found) draft.session.splice(match.index, 1)
+            }),
+          )
+        },
+      },
+      vm: {
+        list() {
+          return current()[0].vm
+        },
+        async sync() {
+          const directory = sdk.directory
+          const client = sdk.client
+          const [, setStore] = globalSync.child(directory)
+          return runInflight(inflightVm, directory, () =>
+            retry(() => client.vm.list()).then((value) => {
+              setStore("vm", reconcile(value.data ?? [], { key: "id" }))
+            }),
+          )
+        },
+        async activity(vmID: string) {
+          const directory = sdk.directory
+          const client = sdk.client
+          const [, setStore] = globalSync.child(directory)
+          const key = keyFor(directory, vmID)
+          return runInflight(inflightVmActivity, key, () =>
+            retry(() => client.vm.activity({ vmID })).then((value) => {
+              setStore("vm_activity", vmID, reconcile(value.data ?? [], { key: "id" }))
             }),
           )
         },

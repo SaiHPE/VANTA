@@ -15,6 +15,8 @@ import type {
   Session,
   SessionStatus,
   Todo,
+  VmActivity,
+  VmSummary,
   VcsInfo,
 } from "@opencode-ai/sdk/v2/client"
 import type { Accessor } from "solid-js"
@@ -62,6 +64,10 @@ export type State = {
     [name: string]: McpStatus
   }
   lsp: LspStatus[]
+  vm: VmSummary[]
+  vm_activity: {
+    [vmID: string]: VmActivity[]
+  }
   vcs: VcsInfo | undefined
   limit: number
   message: {

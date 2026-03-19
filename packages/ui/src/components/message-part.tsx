@@ -1698,6 +1698,159 @@ ToolRegistry.register({
   },
 })
 
+type VMTarget = {
+  id: string
+  name: string
+  status: "pending" | "running" | "completed" | "error"
+  exitCode?: number
+  summary?: string
+}
+
+type VMFile = {
+  name: string
+  mime: string
+  url: string
+}
+
+function vmTone(value?: VMTarget["status"]) {
+  if (value === "completed") return "bg-surface-success-strong"
+  if (value === "error") return "bg-surface-critical-strong"
+  if (value === "running") return "bg-surface-warning-strong"
+  return "bg-border-strong"
+}
+
+function vmSub(tool: string, input: Record<string, any>, targets: VMTarget[]) {
+  const count = targets.length
+  if (tool === "vm_exec") return input.command
+  if (tool === "vm_upload") return input.dest_path
+  if (tool === "vm_download") return input.remote_path
+  if (count > 0) return `${count} VM${count === 1 ? "" : "s"}`
+  if (input.targets) {
+    if (Array.isArray(input.targets)) return input.targets.join(", ")
+    return input.targets
+  }
+}
+
+function VMTool(props: ToolProps & { icon: IconProps["name"]; title: string }) {
+  const busy = createMemo(() => props.status === "pending" || props.status === "running")
+  const targets = createMemo(() => (Array.isArray(props.metadata.targets) ? (props.metadata.targets as VMTarget[]) : []))
+  const files = createMemo(() => (Array.isArray(props.metadata.artifacts) ? (props.metadata.artifacts as VMFile[]) : []))
+  const text = createMemo(() => stripAnsi(props.metadata.preview || props.output || ""))
+  const sub = createMemo(() => vmSub(props.tool, props.input ?? {}, targets()))
+
+  return (
+    <BasicTool
+      {...props}
+      icon={props.icon}
+      forceOpen={busy()}
+      showDetailsWhilePending
+      trigger={
+        <div data-slot="basic-tool-tool-info-structured">
+          <div data-slot="basic-tool-tool-info-main">
+            <span data-slot="basic-tool-tool-title">
+              <TextShimmer text={props.title} active={busy()} />
+            </span>
+            <Show when={sub()}>
+              <span data-slot="basic-tool-tool-subtitle">{sub()}</span>
+            </Show>
+          </div>
+        </div>
+      }
+    >
+      <div class="flex flex-col gap-3">
+        <Show when={targets().length > 0}>
+          <div class="flex flex-col gap-2">
+            <For each={targets()}>
+              {(item) => (
+                <div class="rounded-md border border-border-weak-base px-3 py-2">
+                  <div class="flex items-start justify-between gap-3">
+                    <div class="min-w-0">
+                      <div class="text-13-medium text-text-strong truncate">{item.name}</div>
+                      <Show when={item.summary}>
+                        <div class="pt-1 text-12-regular text-text-weak break-words">{item.summary}</div>
+                      </Show>
+                    </div>
+                    <div class="flex items-center gap-1.5 shrink-0">
+                      <span class={`size-2 rounded-full ${vmTone(item.status)}`} />
+                      <span class="text-11-medium uppercase tracking-[0.08em] text-text-weak">{item.status}</span>
+                    </div>
+                  </div>
+                  <Show when={typeof item.exitCode === "number"}>
+                    <div class="pt-1 text-11-regular text-text-weak">exit {item.exitCode}</div>
+                  </Show>
+                </div>
+              )}
+            </For>
+          </div>
+        </Show>
+
+        <Show when={text()}>
+          <div data-component="bash-output">
+            <div data-slot="bash-scroll" data-scrollable>
+              <pre data-slot="bash-pre">
+                <code>{text()}</code>
+              </pre>
+            </div>
+          </div>
+        </Show>
+
+        <Show when={files().length > 0}>
+          <div class="flex flex-wrap gap-2">
+            <For each={files()}>
+              {(item) => (
+                <a
+                  href={item.url}
+                  download={item.name}
+                  class="inline-flex items-center gap-2 rounded-md border border-border-weak-base px-3 py-2 text-12-medium text-text-strong hover:bg-surface-base-hover"
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  <Icon name="download" size="small" />
+                  {item.name}
+                </a>
+              )}
+            </For>
+          </div>
+        </Show>
+      </div>
+    </BasicTool>
+  )
+}
+
+ToolRegistry.register({
+  name: "vm_list",
+  render(props) {
+    return <VMTool {...props} icon="bullet-list" title="Listed VMs" />
+  },
+})
+
+ToolRegistry.register({
+  name: "vm_test",
+  render(props) {
+    return <VMTool {...props} icon="server" title="Testing VM connectivity" />
+  },
+})
+
+ToolRegistry.register({
+  name: "vm_exec",
+  render(props) {
+    return <VMTool {...props} icon="server" title="Executing remote command" />
+  },
+})
+
+ToolRegistry.register({
+  name: "vm_upload",
+  render(props) {
+    return <VMTool {...props} icon="cloud-upload" title="Uploading file to VM" />
+  },
+})
+
+ToolRegistry.register({
+  name: "vm_download",
+  render(props) {
+    return <VMTool {...props} icon="download" title="Downloading file from VM" />
+  },
+})
+
 ToolRegistry.register({
   name: "edit",
   render(props) {

@@ -10,6 +10,8 @@ import type {
   Session,
   SessionStatus,
   Todo,
+  VmActivity,
+  VmSummary,
 } from "@opencode-ai/sdk/v2/client"
 import type { State, VcsCache } from "./types"
 import { trimSessions } from "./session-trim"
@@ -340,6 +342,57 @@ export function applyDirectoryEvent(input: {
     }
     case "lsp.updated": {
       input.loadLsp()
+      break
+    }
+    case "vm.created":
+    case "vm.updated": {
+      const info = event.properties as VmSummary
+      const result = Binary.search(input.store.vm, info.id, (item) => item.id)
+      if (result.found) {
+        input.setStore("vm", result.index, reconcile(info))
+        break
+      }
+      input.setStore(
+        "vm",
+        produce((draft) => {
+          draft.splice(result.index, 0, info)
+        }),
+      )
+      break
+    }
+    case "vm.deleted": {
+      const info = event.properties as VmSummary
+      const result = Binary.search(input.store.vm, info.id, (item) => item.id)
+      if (result.found) {
+        input.setStore(
+          produce((draft) => {
+            draft.vm.splice(result.index, 1)
+            delete draft.vm_activity[info.id]
+          }),
+        )
+      }
+      break
+    }
+    case "vm.activity.created":
+    case "vm.activity.updated": {
+      const info = event.properties as VmActivity
+      const list = input.store.vm_activity[info.vmID]
+      if (!list) {
+        input.setStore("vm_activity", info.vmID, [info])
+        break
+      }
+      const result = Binary.search(list, info.id, (item) => item.id)
+      if (result.found) {
+        input.setStore("vm_activity", info.vmID, result.index, reconcile(info))
+        break
+      }
+      input.setStore(
+        "vm_activity",
+        info.vmID,
+        produce((draft) => {
+          draft.splice(result.index, 0, info)
+        }),
+      )
       break
     }
   }

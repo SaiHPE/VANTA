@@ -14,3 +14,5 @@ export const SettingsMcp: Component = () => {
     </div>
   )
 }
+
+export const SettingsMCP = SettingsMcp

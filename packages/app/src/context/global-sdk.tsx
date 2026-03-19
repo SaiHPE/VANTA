@@ -11,7 +11,16 @@ const abortError = z.object({
   name: z.literal("AbortError"),
 })
 
-export const { use: useGlobalSDK, provider: GlobalSDKProvider } = createSimpleContext({
+type Client = ReturnType<typeof createSdkForServer>
+type Events = ReturnType<typeof createGlobalEmitter<{ [key: string]: Event }>>
+export type GlobalSDK = {
+  url: string
+  client: Client
+  event: Events
+  createClient(opts: Omit<Parameters<typeof createSdkForServer>[0], "server" | "fetch">): Client
+}
+
+export const { use: useGlobalSDK, provider: GlobalSDKProvider } = createSimpleContext<GlobalSDK, {}>({
   name: "GlobalSDK",
   init: () => {
     const server = useServer()
@@ -37,9 +46,7 @@ export const { use: useGlobalSDK, provider: GlobalSDKProvider } = createSimpleCo
       fetch: eventFetch,
       server: currentServer.http,
     })
-    const emitter = createGlobalEmitter<{
-      [key: string]: Event
-    }>()
+    const emitter = createGlobalEmitter<{ [key: string]: Event }>()
 
     type Queued = { directory: string; payload: Event }
     const FLUSH_FRAME_MS = 16

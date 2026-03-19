@@ -46,8 +46,7 @@ import { setSessionHandoff } from "@/pages/session/handoff"
 
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { useTheme, type ColorScheme } from "@opencode-ai/ui/theme"
-import { DialogSelectProvider } from "@/components/dialog-select-provider"
-import { DialogSelectServer } from "@/components/dialog-select-server"
+import { DialogConnectOllama } from "@/components/dialog-connect-ollama"
 import { DialogSettings } from "@/components/dialog-settings"
 import { useCommand, type CommandOption } from "@/context/command"
 import { ConstrainDragXAxis } from "@/utils/solid-dnd"
@@ -284,59 +283,6 @@ export default function Layout(props: ParentProps) {
     setLocale(next)
   }
 
-  const useUpdatePolling = () =>
-    onMount(() => {
-      if (!platform.checkUpdate || !platform.update || !platform.restart) return
-
-      let toastId: number | undefined
-      let interval: ReturnType<typeof setInterval> | undefined
-
-      const pollUpdate = () =>
-        platform.checkUpdate!().then(({ updateAvailable, version }) => {
-          if (!updateAvailable) return
-          if (toastId !== undefined) return
-          toastId = showToast({
-            persistent: true,
-            icon: "download",
-            title: language.t("toast.update.title"),
-            description: language.t("toast.update.description", { version: version ?? "" }),
-            actions: [
-              {
-                label: language.t("toast.update.action.installRestart"),
-                onClick: async () => {
-                  await platform.update!()
-                  await platform.restart!()
-                },
-              },
-              {
-                label: language.t("toast.update.action.notYet"),
-                onClick: "dismiss",
-              },
-            ],
-          })
-        })
-
-      createEffect(() => {
-        if (!settings.ready()) return
-
-        if (!settings.updates.startup()) {
-          if (interval === undefined) return
-          clearInterval(interval)
-          interval = undefined
-          return
-        }
-
-        if (interval !== undefined) return
-        void pollUpdate()
-        interval = setInterval(pollUpdate, 10 * 60 * 1000)
-      })
-
-      onCleanup(() => {
-        if (interval === undefined) return
-        clearInterval(interval)
-      })
-    })
-
   const useSDKNotificationToasts = () =>
     onMount(() => {
       const toastBySession = new Map<string, number>()
@@ -445,7 +391,6 @@ export default function Layout(props: ParentProps) {
       })
     })
 
-  useUpdatePolling()
   useSDKNotificationToasts()
 
   function scrollToSession(sessionId: string, sessionKey: string) {
@@ -877,19 +822,13 @@ export default function Layout(props: ParentProps) {
         onSelect: () => chooseProject(),
       },
       {
-        id: "provider.connect",
+        id: "ollama.connect",
         title: language.t("command.provider.connect"),
-        category: language.t("command.category.provider"),
-        onSelect: () => connectProvider(),
+        category: language.t("command.category.model"),
+        onSelect: () => connectModel(),
       },
-      {
-        id: "server.switch",
-        title: language.t("command.server.switch"),
-        category: language.t("command.category.server"),
-        onSelect: () => openServer(),
-      },
-      {
-        id: "settings.open",
+        {
+          id: "settings.open",
         title: language.t("command.settings.open"),
         category: language.t("command.category.settings"),
         keybind: "mod+comma",
@@ -1031,16 +970,12 @@ export default function Layout(props: ParentProps) {
     return commands
   })
 
-  function connectProvider() {
-    dialog.show(() => <DialogSelectProvider />)
+  function connectModel() {
+    dialog.show(() => <DialogConnectOllama />)
   }
 
-  function openServer() {
-    dialog.show(() => <DialogSelectServer />)
-  }
-
-  function openSettings() {
-    dialog.show(() => <DialogSettings />)
+  function openSettings(tab?: string) {
+    dialog.show(() => <DialogSettings tab={tab} />)
   }
 
   function projectRoot(directory: string) {
@@ -2008,7 +1943,7 @@ export default function Layout(props: ParentProps) {
         <div
           class="shrink-0 px-2 py-3 border-t border-border-weak-base"
           classList={{
-            hidden: !(providers.all().length > 0 && providers.paid().length === 0),
+            hidden: providers.connected().length > 0,
           }}
         >
           <div class="rounded-md bg-background-base shadow-xs-border-base">
@@ -2021,10 +1956,10 @@ export default function Layout(props: ParentProps) {
               class="flex w-full text-left justify-start text-12-medium text-text-strong stroke-[1.5px] rounded-md rounded-t-none shadow-none border-t border-border-weak-base px-3"
               size="large"
               icon="plus"
-              onClick={connectProvider}
-            >
-              {language.t("command.provider.connect")}
-            </Button>
+                onClick={connectModel}
+              >
+                {language.t("command.provider.connect")}
+              </Button>
           </div>
         </div>
       </div>
@@ -2084,7 +2019,7 @@ export default function Layout(props: ParentProps) {
               settingsKeybind={() => command.keybind("settings.open")}
               onOpenSettings={openSettings}
               helpLabel={() => language.t("sidebar.help")}
-              onOpenHelp={() => platform.openLink("https://opencode.ai/desktop-feedback")}
+              onOpenHelp={() => platform.openLink("https://opencode.ai/docs")}
               renderPanel={() => (
                 <Show when={currentProject()} keyed>
                   {(project) => <SidebarPanel project={project} />}
@@ -2151,7 +2086,7 @@ export default function Layout(props: ParentProps) {
               settingsKeybind={() => command.keybind("settings.open")}
               onOpenSettings={openSettings}
               helpLabel={() => language.t("sidebar.help")}
-              onOpenHelp={() => platform.openLink("https://opencode.ai/desktop-feedback")}
+              onOpenHelp={() => platform.openLink("https://opencode.ai/docs")}
               renderPanel={() => <SidebarPanel project={currentProject()} mobile />}
             />
           </nav>

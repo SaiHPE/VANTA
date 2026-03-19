@@ -1,9 +1,7 @@
 import type {
   Config,
-  OpencodeClient,
   Path,
   Project,
-  ProviderAuthResponse,
   ProviderListResponse,
   Todo,
 } from "@opencode-ai/sdk/v2/client"
@@ -31,10 +29,11 @@ import { applyDirectoryEvent, applyGlobalEvent } from "./global-sync/event-reduc
 import { createRefreshQueue } from "./global-sync/queue"
 import { estimateRootSessionTotal, loadRootSessionsWithFallback } from "./global-sync/session-load"
 import { trimSessions } from "./global-sync/session-trim"
-import type { ProjectMeta } from "./global-sync/types"
+import type { ProjectMeta, RootLoadResult, State } from "./global-sync/types"
 import { SESSION_RECENT_LIMIT } from "./global-sync/types"
 import { sanitizeProject } from "./global-sync/utils"
 import { formatServerError } from "@/utils/server-errors"
+import { createSdkForServer } from "@/utils/server"
 
 type GlobalStore = {
   ready: boolean
@@ -45,10 +44,11 @@ type GlobalStore = {
     [sessionID: string]: Todo[]
   }
   provider: ProviderListResponse
-  provider_auth: ProviderAuthResponse
   config: Config
   reload: undefined | "pending" | "complete"
 }
+
+type Client = ReturnType<typeof createSdkForServer>
 
 function createGlobalSync() {
   const globalSDK = useGlobalSDK()
@@ -56,7 +56,7 @@ function createGlobalSync() {
   const owner = getOwner()
   if (!owner) throw new Error("GlobalSync must be created within owner")
 
-  const sdkCache = new Map<string, OpencodeClient>()
+  const sdkCache = new Map<string, Client>()
   const booting = new Map<string, Promise<void>>()
   const sessionLoads = new Map<string, Promise<void>>()
   const sessionMeta = new Map<string, { limit: number }>()
@@ -72,7 +72,6 @@ function createGlobalSync() {
     project: projectCache.value,
     session_todo: {},
     provider: { all: [], connected: [], default: {} },
-    provider_auth: {},
     config: {},
     reload: undefined,
   })
@@ -200,9 +199,9 @@ function createGlobalSync() {
       limit,
       list: (query) => globalSDK.client.session.list(query),
     })
-      .then((x) => {
+      .then((x: RootLoadResult) => {
         const nonArchived = (x.data ?? [])
-          .filter((s) => !!s?.id)
+          .filter((s): s is State["session"][number] => !!s?.id)
           .filter((s) => !s.time?.archived)
           .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
         const limit = store.limit

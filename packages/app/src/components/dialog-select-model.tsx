@@ -3,14 +3,13 @@ import { Component, ComponentProps, createMemo, JSX, Show, ValidComponent } from
 import { createStore } from "solid-js/store"
 import { useLocal } from "@/context/local"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
-import { popularProviders } from "@/hooks/use-providers"
 import { Button } from "@opencode-ai/ui/button"
 import { IconButton } from "@opencode-ai/ui/icon-button"
 import { Tag } from "@opencode-ai/ui/tag"
 import { Dialog } from "@opencode-ai/ui/dialog"
 import { List } from "@opencode-ai/ui/list"
 import { Tooltip } from "@opencode-ai/ui/tooltip"
-import { DialogSelectProvider } from "./dialog-select-provider"
+import { DialogConnectOllama } from "./dialog-connect-ollama"
 import { DialogManageModels } from "./dialog-manage-models"
 import { ModelTooltip } from "./model-tooltip"
 import { useLanguage } from "@/context/language"
@@ -45,13 +44,7 @@ const ModelList: Component<{
       filterKeys={["provider.name", "name", "id"]}
       sortBy={(a, b) => a.name.localeCompare(b.name)}
       groupBy={(x) => x.provider.name}
-      sortGroupsBy={(a, b) => {
-        const aProvider = a.items[0].provider.id
-        const bProvider = b.items[0].provider.id
-        if (popularProviders.includes(aProvider) && !popularProviders.includes(bProvider)) return -1
-        if (!popularProviders.includes(aProvider) && popularProviders.includes(bProvider)) return 1
-        return popularProviders.indexOf(aProvider) - popularProviders.indexOf(bProvider)
-      }}
+      sortGroupsBy={(a, b) => a.items[0].provider.name.localeCompare(b.items[0].provider.name)}
       itemWrapper={(item, node) => (
         <Tooltip
           class="w-full"
@@ -108,7 +101,7 @@ export function ModelSelectorPopover(props: {
 
   const handleConnectProvider = () => {
     setStore("open", false)
-    dialog.show(() => <DialogSelectProvider />)
+    dialog.show(() => <DialogConnectOllama />)
   }
   const language = useLanguage()
 
@@ -196,7 +189,7 @@ export const DialogSelectModel: Component<{ provider?: string }> = (props) => {
           class="h-7 -my-1 text-14-medium"
           icon="plus-small"
           tabIndex={-1}
-          onClick={() => dialog.show(() => <DialogSelectProvider />)}
+          onClick={() => dialog.show(() => <DialogConnectOllama />)}
         >
           {language.t("command.provider.connect")}
         </Button>

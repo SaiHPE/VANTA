@@ -100,7 +100,7 @@ describe("structured-output.UserMessage", () => {
       role: "user",
       time: { created: Date.now() },
       agent: "default",
-      model: { providerID: "anthropic", modelID: "claude-3" },
+      model: { providerID: "ollama", modelID: "qwen3:8b" },
       outputFormat: {
         type: "json_schema",
         schema: { type: "object" },
@@ -116,7 +116,7 @@ describe("structured-output.UserMessage", () => {
       role: "user",
       time: { created: Date.now() },
       agent: "default",
-      model: { providerID: "anthropic", modelID: "claude-3" },
+      model: { providerID: "ollama", modelID: "qwen3:8b" },
     })
     expect(result.success).toBe(true)
   })
@@ -128,8 +128,8 @@ describe("structured-output.AssistantMessage", () => {
     sessionID: "test-session",
     role: "assistant" as const,
     parentID: "parent-id",
-    modelID: "claude-3",
-    providerID: "anthropic",
+    modelID: "qwen3:8b",
+    providerID: "ollama",
     mode: "default",
     agent: "default",
     path: { cwd: "/test", root: "/test" },
@@ -141,11 +141,11 @@ describe("structured-output.AssistantMessage", () => {
   test("assistant message accepts structured", () => {
     const result = MessageV2.Assistant.safeParse({
       ...baseAssistantMessage,
-      structured: { company: "Anthropic", founded: 2021 },
+      structured: { company: "Ollama", founded: 2023 },
     })
     expect(result.success).toBe(true)
     if (result.success) {
-      expect(result.data.structured).toEqual({ company: "Anthropic", founded: 2021 })
+      expect(result.data.structured).toEqual({ company: "Ollama", founded: 2023 })
     }
   })
 

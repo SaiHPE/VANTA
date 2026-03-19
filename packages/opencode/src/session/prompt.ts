@@ -45,6 +45,7 @@ import { LLM } from "./llm"
 import { iife } from "@/util/iife"
 import { Shell } from "@/shell/shell"
 import { Truncate } from "@/tool/truncation"
+import { VM } from "@/vm"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -298,12 +299,16 @@ export namespace SessionPrompt {
       let msgs = await MessageV2.filterCompacted(MessageV2.stream(sessionID))
 
       let lastUser: MessageV2.User | undefined
+      let lastTurn: MessageV2.WithParts | undefined
       let lastAssistant: MessageV2.Assistant | undefined
       let lastFinished: MessageV2.Assistant | undefined
       let tasks: (MessageV2.CompactionPart | MessageV2.SubtaskPart)[] = []
       for (let i = msgs.length - 1; i >= 0; i--) {
         const msg = msgs[i]
-        if (!lastUser && msg.info.role === "user") lastUser = msg.info as MessageV2.User
+        if (!lastUser && msg.info.role === "user") {
+          lastUser = msg.info as MessageV2.User
+          lastTurn = msg
+        }
         if (!lastAssistant && msg.info.role === "assistant") lastAssistant = msg.info as MessageV2.Assistant
         if (!lastFinished && msg.info.role === "assistant" && msg.info.finish)
           lastFinished = msg.info as MessageV2.Assistant
@@ -314,7 +319,7 @@ export namespace SessionPrompt {
         }
       }
 
-      if (!lastUser) throw new Error("No user message found in stream. This should never happen.")
+      if (!lastUser || !lastTurn) throw new Error("No user message found in stream. This should never happen.")
       if (
         lastAssistant?.finish &&
         !["tool-calls", "unknown"].includes(lastAssistant.finish) &&
@@ -500,7 +505,7 @@ export namespace SessionPrompt {
         if (task.command) {
           // Add synthetic user message to prevent certain reasoning models from erroring
           // If we create assistant messages w/ out user ones following mid loop thinking signatures
-          // will be missing and it can cause errors for models like gemini for example
+          // will be missing and it can cause errors for some reasoning models
           const summaryUserMsg: MessageV2.User = {
             id: Identifier.ascending("message"),
             sessionID,
@@ -650,6 +655,14 @@ export namespace SessionPrompt {
 
       // Build system prompt, adding structured output instruction if needed
       const system = [...(await SystemPrompt.environment(model)), ...(await InstructionPrompt.system())]
+      const vmText = await VM.context({
+        agent: agent.name,
+        text: lastTurn.parts
+          .filter((part): part is MessageV2.TextPart => part.type === "text" && !part.synthetic)
+          .map((part) => part.text)
+          .join("\n"),
+      })
+      if (vmText) system.push(vmText)
       const format = lastUser.format ?? { type: "text" }
       if (format.type === "json_schema") {
         system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
@@ -764,7 +777,7 @@ export namespace SessionPrompt {
               status: "running",
               input: args,
               time: {
-                start: Date.now(),
+                start: match.state.time.start,
               },
             },
           })

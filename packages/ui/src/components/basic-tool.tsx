@@ -31,6 +31,7 @@ export interface BasicToolProps {
   defer?: boolean
   locked?: boolean
   animated?: boolean
+  showDetailsWhilePending?: boolean
   onSubtitleClick?: () => void
 }
 
@@ -40,6 +41,7 @@ export function BasicTool(props: BasicToolProps) {
   const [open, setOpen] = createSignal(props.defaultOpen ?? false)
   const [ready, setReady] = createSignal(open())
   const pending = () => props.status === "pending" || props.status === "running"
+  const details = () => props.children && !props.hideDetails && (!pending() || props.showDetailsWhilePending)
 
   let frame: number | undefined
 
@@ -176,12 +178,12 @@ export function BasicTool(props: BasicToolProps) {
               </Switch>
             </div>
           </div>
-          <Show when={props.children && !props.hideDetails && !props.locked && !pending()}>
+          <Show when={details() && !props.locked}>
             <Collapsible.Arrow />
           </Show>
         </div>
       </Collapsible.Trigger>
-      <Show when={props.animated && props.children && !props.hideDetails}>
+      <Show when={props.animated && details()}>
         <div
           ref={contentRef}
           data-slot="collapsible-content"
@@ -194,7 +196,7 @@ export function BasicTool(props: BasicToolProps) {
           {props.children}
         </div>
       </Show>
-      <Show when={!props.animated && props.children && !props.hideDetails}>
+      <Show when={!props.animated && details()}>
         <Collapsible.Content>
           <Show when={!props.defer || ready()}>{props.children}</Show>
         </Collapsible.Content>

@@ -5,24 +5,19 @@ import { describeRoute, generateSpecs, validator, resolver, openAPIRouteHandler 
 import { Hono } from "hono"
 import { cors } from "hono/cors"
 import { streamSSE } from "hono/streaming"
-import { proxy } from "hono/proxy"
 import { basicAuth } from "hono/basic-auth"
 import z from "zod"
 import { Provider } from "../provider/provider"
 import { NamedError } from "@opencode-ai/util/error"
 import { LSP } from "../lsp"
 import { Format } from "../format"
-import { TuiRoutes } from "./routes/tui"
 import { Instance } from "../project/instance"
 import { Vcs } from "../project/vcs"
 import { Agent } from "../agent/agent"
 import { Skill } from "../skill/skill"
-import { Auth } from "../auth"
 import { Flag } from "../flag/flag"
 import { Command } from "../command"
 import { Global } from "../global"
-import { WorkspaceContext } from "../control-plane/workspace-context"
-import { WorkspaceRouterMiddleware } from "../control-plane/workspace-router-middleware"
 import { ProjectRoutes } from "./routes/project"
 import { SessionRoutes } from "./routes/session"
 import { PtyRoutes } from "./routes/pty"
@@ -42,12 +37,16 @@ import { QuestionRoutes } from "./routes/question"
 import { PermissionRoutes } from "./routes/permission"
 import { GlobalRoutes } from "./routes/global"
 import { MDNS } from "./mdns"
+import { VmRoutes } from "./routes/vm"
+import path from "path"
+import { Filesystem } from "../util/filesystem"
 
 // @ts-ignore This global is needed to prevent ai-sdk from logging warnings to stdout https://github.com/vercel/ai/blob/2dc67e0ef538307f21368db32d5a12345d98831b/packages/ai/src/logger/log-warnings.ts#L85
 globalThis.AI_SDK_LOG_WARNINGS = false
 
 export namespace Server {
   const log = Log.create({ service: "server" })
+  const web = path.resolve(import.meta.dir, "../../../app/dist")
 
   let _url: URL | undefined
   let _corsWhitelist: string[] = []
@@ -112,12 +111,6 @@ export namespace Server {
 
               if (input.startsWith("http://localhost:")) return input
               if (input.startsWith("http://127.0.0.1:")) return input
-              if (
-                input === "tauri://localhost" ||
-                input === "http://tauri.localhost" ||
-                input === "https://tauri.localhost"
-              )
-                return input
 
               // *.opencode.ai (https only, adjust if needed)
               if (/^https:\/\/([a-z0-9-]+\.)*opencode\.ai$/.test(input)) {
@@ -132,71 +125,8 @@ export namespace Server {
           }),
         )
         .route("/global", GlobalRoutes())
-        .put(
-          "/auth/:providerID",
-          describeRoute({
-            summary: "Set auth credentials",
-            description: "Set authentication credentials",
-            operationId: "auth.set",
-            responses: {
-              200: {
-                description: "Successfully set authentication credentials",
-                content: {
-                  "application/json": {
-                    schema: resolver(z.boolean()),
-                  },
-                },
-              },
-              ...errors(400),
-            },
-          }),
-          validator(
-            "param",
-            z.object({
-              providerID: z.string(),
-            }),
-          ),
-          validator("json", Auth.Info),
-          async (c) => {
-            const providerID = c.req.valid("param").providerID
-            const info = c.req.valid("json")
-            await Auth.set(providerID, info)
-            return c.json(true)
-          },
-        )
-        .delete(
-          "/auth/:providerID",
-          describeRoute({
-            summary: "Remove auth credentials",
-            description: "Remove authentication credentials",
-            operationId: "auth.remove",
-            responses: {
-              200: {
-                description: "Successfully removed authentication credentials",
-                content: {
-                  "application/json": {
-                    schema: resolver(z.boolean()),
-                  },
-                },
-              },
-              ...errors(400),
-            },
-          }),
-          validator(
-            "param",
-            z.object({
-              providerID: z.string(),
-            }),
-          ),
-          async (c) => {
-            const providerID = c.req.valid("param").providerID
-            await Auth.remove(providerID)
-            return c.json(true)
-          },
-        )
         .use(async (c, next) => {
           if (c.req.path === "/log") return next()
-          const workspaceID = c.req.query("workspace") || c.req.header("x-opencode-workspace")
           const raw = c.req.query("directory") || c.req.header("x-opencode-directory") || process.cwd()
           const directory = (() => {
             try {
@@ -206,20 +136,14 @@ export namespace Server {
             }
           })()
 
-          return WorkspaceContext.provide({
-            workspaceID,
+          return Instance.provide({
+            directory,
+            init: InstanceBootstrap,
             async fn() {
-              return Instance.provide({
-                directory,
-                init: InstanceBootstrap,
-                async fn() {
-                  return next()
-                },
-              })
+              return next()
             },
           })
         })
-        .use(WorkspaceRouterMiddleware)
         .get(
           "/doc",
           openAPIRouteHandler(app, {
@@ -238,11 +162,11 @@ export namespace Server {
             "query",
             z.object({
               directory: z.string().optional(),
-              workspace: z.string().optional(),
             }),
           ),
         )
         .route("/project", ProjectRoutes())
+        .route("/vm", VmRoutes())
         .route("/pty", PtyRoutes())
         .route("/config", ConfigRoutes())
         .route("/experimental", ExperimentalRoutes())
@@ -252,7 +176,6 @@ export namespace Server {
         .route("/provider", ProviderRoutes())
         .route("/", FileRoutes())
         .route("/mcp", McpRoutes())
-        .route("/tui", TuiRoutes())
         .post(
           "/instance/dispose",
           describeRoute({
@@ -559,20 +482,40 @@ export namespace Server {
           },
         )
         .all("/*", async (c) => {
-          const path = c.req.path
+          const rel = path.normalize(c.req.path === "/" ? "index.html" : c.req.path.slice(1))
+          if (rel.startsWith("..")) return c.notFound()
 
-          const response = await proxy(`https://app.opencode.ai${path}`, {
-            ...c.req,
-            headers: {
-              ...c.req.raw.headers,
-              host: "app.opencode.ai",
-            },
-          })
-          response.headers.set(
-            "Content-Security-Policy",
-            "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; media-src 'self' data:; connect-src 'self' data:",
+          const file = Bun.file(path.join(web, rel))
+          if (await file.exists()) {
+            return new Response(file, {
+              headers: {
+                "Cache-Control": "no-store",
+                "Content-Type": Filesystem.mimeType(rel),
+                "X-Content-Type-Options": "nosniff",
+              },
+            })
+          }
+
+          const index = Bun.file(path.join(web, "index.html"))
+          if (await index.exists()) {
+            return new Response(index, {
+              headers: {
+                "Cache-Control": "no-store",
+                "Content-Type": "text/html; charset=utf-8",
+              },
+            })
+          }
+
+          return c.html(
+            [
+              "<!doctype html>",
+              "<html><head><meta charset=\"utf-8\"><title>OpenCode Web</title></head>",
+              "<body style=\"font-family: ui-sans-serif, system-ui, sans-serif; padding: 24px;\">",
+              "<h1>Web app not built</h1>",
+              "<p>Build it with <code>bun --cwd packages/app build</code> or run the dev server with <code>bun run dev:web</code>.</p>",
+              "</body></html>",
+            ].join(""),
           )
-          return response
         }) as unknown as Hono,
   )
 

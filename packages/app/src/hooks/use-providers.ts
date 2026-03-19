@@ -4,16 +4,8 @@ import { useParams } from "@solidjs/router"
 import { createMemo } from "solid-js"
 
 export const popularProviders = [
-  "opencode",
-  "opencode-go",
-  "anthropic",
-  "github-copilot",
-  "openai",
-  "google",
-  "openrouter",
-  "vercel",
+  "ollama",
 ]
-const popularProviderSet = new Set(popularProviders)
 
 export function useProviders() {
   const globalSync = useGlobalSync()
@@ -26,17 +18,12 @@ export function useProviders() {
     }
     return globalSync.data.provider
   })
-  const connectedIDs = createMemo(() => new Set(providers().connected))
-  const connected = createMemo(() => providers().all.filter((p) => connectedIDs().has(p.id)))
-  const paid = createMemo(() =>
-    connected().filter((p) => p.id !== "opencode" || Object.values(p.models).find((m) => m.cost?.input)),
-  )
-  const popular = createMemo(() => providers().all.filter((p) => popularProviderSet.has(p.id)))
+  const all = createMemo(() => providers().all.filter((item) => item.id === "ollama"))
+  const connectedIDs = createMemo(() => new Set<string>(providers().connected.filter((item) => item === "ollama")))
+  const connected = createMemo(() => all().filter((p) => connectedIDs().has(p.id)))
   return {
-    all: createMemo(() => providers().all),
+    all,
     default: createMemo(() => providers().default),
-    popular,
     connected,
-    paid,
   }
 }

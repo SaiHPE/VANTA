@@ -1,7 +1,7 @@
 import { createMemo } from "solid-js"
 import { createStore } from "solid-js/store"
 import { DateTime } from "luxon"
-import { filter, firstBy, flat, groupBy, mapValues, pipe, uniqueBy, values } from "remeda"
+import { uniqueBy } from "remeda"
 import { createSimpleContext } from "@opencode-ai/ui/context"
 import { useProviders } from "@/hooks/use-providers"
 import { Persist, persisted } from "@/utils/persist"
@@ -49,40 +49,31 @@ export const { use: useModels, provider: ModelsProvider } = createSimpleContext(
       () =>
         new Map(
           available().map((model) => {
-            const parsed = DateTime.fromISO(model.release_date)
+            const parsed = model.release_date ? DateTime.fromISO(model.release_date) : DateTime.invalid("missing")
             return [modelKey({ providerID: model.provider.id, modelID: model.id }), parsed] as const
           }),
         ),
     )
 
-    const latest = createMemo(() =>
-      pipe(
-        available(),
-        filter(
-          (x) =>
-            Math.abs(
-              (release().get(modelKey({ providerID: x.provider.id, modelID: x.id })) ?? DateTime.invalid("invalid"))
-                .diffNow()
-                .as("months"),
-            ) < 6,
-        ),
-        groupBy((x) => x.provider.id),
-        mapValues((models) =>
-          pipe(
-            models,
-            groupBy((x) => x.family),
-            values(),
-            (groups) =>
-              groups.flatMap((g) => {
-                const first = firstBy(g, [(x) => x.release_date, "desc"])
-                return first ? [{ modelID: first.id, providerID: first.provider.id }] : []
-              }),
-          ),
-        ),
-        values(),
-        flat(),
-      ),
-    )
+    const latest = createMemo(() => {
+      const seen = new Map<
+        string,
+        Map<string, { id: string; family?: string; release_date?: string; provider: { id: string } }>
+      >()
+      for (const model of available()) {
+        const date = release().get(modelKey({ providerID: model.provider.id, modelID: model.id }))
+        if (!date?.isValid) continue
+        if (Math.abs(date.diffNow().as("months")) >= 6) continue
+        const groups = seen.get(model.provider.id) ?? new Map()
+        const key = model.family || model.id
+        const prev = groups.get(key)
+        if (!prev || (model.release_date ?? "") > (prev.release_date ?? "")) groups.set(key, model)
+        if (!seen.has(model.provider.id)) seen.set(model.provider.id, groups)
+      }
+      return [...seen.values()].flatMap((groups) =>
+        [...groups.values()].map((model) => ({ modelID: model.id, providerID: model.provider.id })),
+      )
+    })
 
     const latestSet = createMemo(() => new Set(latest().map((x) => modelKey(x))))
 

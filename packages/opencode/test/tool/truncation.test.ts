@@ -1,7 +1,6 @@
 import { describe, test, expect, afterAll } from "bun:test"
 import { Truncate } from "../../src/tool/truncation"
 import { Identifier } from "../../src/id/id"
-import { Filesystem } from "../../src/util/filesystem"
 import fs from "fs/promises"
 import path from "path"
 
@@ -10,7 +9,7 @@ const FIXTURES_DIR = path.join(import.meta.dir, "fixtures")
 describe("Truncate", () => {
   describe("output", () => {
     test("truncates large json file by bytes", async () => {
-      const content = await Filesystem.readText(path.join(FIXTURES_DIR, "models-api.json"))
+      const content = "x".repeat(Truncate.MAX_BYTES + 1024)
       const result = await Truncate.output(content)
 
       expect(result.truncated).toBe(true)
@@ -70,7 +69,7 @@ describe("Truncate", () => {
     })
 
     test("large single-line file truncates with byte message", async () => {
-      const content = await Filesystem.readText(path.join(FIXTURES_DIR, "models-api.json"))
+      const content = "x".repeat(Truncate.MAX_BYTES + 1024)
       const result = await Truncate.output(content)
 
       expect(result.truncated).toBe(true)
