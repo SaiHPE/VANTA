@@ -7,6 +7,9 @@ import type {
   PermissionRequest,
   Project,
   QuestionRequest,
+  RunbookRun,
+  RunbookSessionState,
+  RunbookStepRecord,
   Session,
   SessionStatus,
   Todo,
@@ -52,6 +55,7 @@ function cleanupSessionCaches(
     store.message[sessionID] !== undefined ||
     store.session_diff[sessionID] !== undefined ||
     store.todo[sessionID] !== undefined ||
+    store.runbook[sessionID] !== undefined ||
     store.permission[sessionID] !== undefined ||
     store.question[sessionID] !== undefined ||
     store.session_status[sessionID] !== undefined
@@ -70,6 +74,7 @@ function cleanupSessionCaches(
       delete draft.message[sessionID]
       delete draft.session_diff[sessionID]
       delete draft.todo[sessionID]
+      delete draft.runbook[sessionID]
       delete draft.permission[sessionID]
       delete draft.question[sessionID]
       delete draft.session_status[sessionID]
@@ -164,6 +169,39 @@ export function applyDirectoryEvent(input: {
     case "session.status": {
       const props = event.properties as { sessionID: string; status: SessionStatus }
       input.setStore("session_status", props.sessionID, reconcile(props.status))
+      break
+    }
+    case "runbook.run.updated": {
+      const props = event.properties as { sessionID: string; run: RunbookRun }
+      input.setStore("runbook", props.sessionID, (value) => ({
+        sessionID: props.sessionID,
+        path: value?.path ?? "",
+        exists: value?.exists ?? false,
+        raw: value?.raw,
+        plan: value?.plan,
+        steps: value?.steps ?? [],
+        run: props.run,
+      }))
+      break
+    }
+    case "runbook.step.updated": {
+      const props = event.properties as { sessionID: string; step: RunbookStepRecord }
+      input.setStore("runbook", props.sessionID, (value) => {
+        const steps = (value?.steps ?? []).slice()
+        const idx = steps.findIndex((item) => item.id === props.step.id)
+        if (idx >= 0) steps[idx] = props.step
+        if (idx < 0) steps.push(props.step)
+        steps.sort((a, b) => a.stepIdx - b.stepIdx)
+        return {
+          sessionID: props.sessionID,
+          path: value?.path ?? "",
+          exists: value?.exists ?? false,
+          raw: value?.raw,
+          plan: value?.plan,
+          run: value?.run,
+          steps,
+        } satisfies RunbookSessionState
+      })
       break
     }
     case "message.updated": {

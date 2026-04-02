@@ -5,6 +5,7 @@
 - Searches are performed automatically within a single API call
 
 Usage notes:
+  - Prefer this tool to discover official documentation pages when the exact URL is unknown or a previous `webfetch` returned 404/410
   - Supports live crawling modes: 'fallback' (backup if cached unavailable) or 'preferred' (prioritize live crawling)
   - Search types: 'auto' (balanced), 'fast' (quick results), 'deep' (comprehensive search)
   - Configurable context length for optimal LLM integration

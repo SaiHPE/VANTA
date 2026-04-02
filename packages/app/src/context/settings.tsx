@@ -45,7 +45,7 @@ const defaultSettings: Settings = {
   general: {
     autoSave: true,
     releaseNotes: true,
-    showReasoningSummaries: false,
+    showReasoningSummaries: true,
     shellToolPartsExpanded: true,
     editToolPartsExpanded: false,
   },

@@ -6,8 +6,10 @@
 
 Usage notes:
   - IMPORTANT: if another tool is present that offers better web fetching capabilities, is more targeted to the task, or has fewer restrictions, prefer using that tool instead of this one.
+  - This tool fetches a specific URL. It is not a search engine and should not be used to guess documentation paths.
   - The URL must be a fully-formed valid URL
   - HTTP URLs will be automatically upgraded to HTTPS
+  - If the exact page is unknown, or a fetch returns 404/410, use `websearch` when available instead of trying guessed sibling URLs on the same domain
   - Format options: "markdown" (default), "text", or "html"
   - This tool is read-only and does not modify any files
   - Results may be summarized if the content is very large

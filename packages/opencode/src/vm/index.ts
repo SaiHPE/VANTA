@@ -7,7 +7,7 @@ import { MessageV2 } from "@/session/message-v2"
 import { fn } from "@/util/fn"
 import { Question } from "@/question"
 import z from "zod"
-import { type Client } from "ssh2"
+import { type Client, type SFTPWrapper } from "ssh2"
 import { VMSSH } from "./ssh"
 import { VmActivityTable, VmTable } from "./vm.sql"
 
@@ -58,6 +58,8 @@ export namespace VM {
       username: z.string(),
       authType: AuthType,
       notes: z.string().optional(),
+      workspaceRoot: z.string().optional(),
+      repoUrl: z.string().optional(),
       facts: Facts.optional(),
       lastStatus: Status,
       lastSeenAt: z.number().optional(),
@@ -93,6 +95,7 @@ export namespace VM {
       summary: z.string().optional(),
       exitCode: z.number().int().optional(),
       transcript: z.string().optional(),
+      transcriptPath: z.string().optional(),
       artifacts: Artifact.array().optional(),
       startedAt: z.number(),
       endedAt: z.number().optional(),
@@ -118,6 +121,8 @@ export namespace VM {
       privateKey: z.string().optional(),
       passphrase: z.string().optional(),
       notes: z.string().optional(),
+      workspaceRoot: z.string().optional(),
+      repoUrl: z.string().optional(),
     })
     .meta({
       ref: "VMDraft",
@@ -179,6 +184,8 @@ export namespace VM {
             private_key: result.privateKey ?? null,
             passphrase: result.passphrase ?? null,
             notes: result.notes ?? null,
+            workspace_root: result.workspaceRoot ?? null,
+            repo_url: result.repoUrl ?? null,
             time_updated: result.time.updated,
           })
           .where(and(eq(VmTable.project_id, Instance.project.id), eq(VmTable.id, input.vmID)))
@@ -217,10 +224,21 @@ export namespace VM {
     ActivityUpdated: BusEvent.define("vm.activity.updated", Activity),
   }
 
+  export type Connection = {
+    client: Client
+    host: string
+    time: number
+    shell?: "bash" | "sh"
+    shelling?: Promise<"bash" | "sh">
+    facts?: Facts
+    learning?: Promise<Facts>
+    sftp?: Promise<SFTPWrapper>
+  }
+
   const state = Instance.state(
     () => ({
       confirmed: {} as Record<string, string[]>,
-      conn: new Map<string, { client: Client; host: string; time: number }>(),
+      conn: new Map<string, Connection>(),
     }),
     async (entry) => {
       for (const item of entry.conn.values()) {
@@ -243,6 +261,8 @@ export namespace VM {
     const privateKey = input.authType === "private_key" ? input.privateKey : undefined
     const passphrase = input.authType === "private_key" ? clean(input.passphrase) : undefined
     const notes = clean(input.notes)
+    const workspaceRoot = clean(input.workspaceRoot)
+    const repoUrl = clean(input.repoUrl)
     const port = input.port ?? 22
 
     if (!name) throw new Error("VM name is required")
@@ -262,10 +282,12 @@ export namespace VM {
       privateKey: input.authType === "private_key" ? clean(privateKey) : undefined,
       passphrase,
       notes,
+      workspaceRoot,
+      repoUrl,
     } satisfies Omit<Detail, "id" | "projectID" | "facts" | "lastStatus" | "lastSeenAt" | "time">
   }
 
-  function facts(input: {
+  function shape(input: {
     os_name?: string | null
     os_version?: string | null
     kernel?: string | null
@@ -296,6 +318,8 @@ export namespace VM {
       username: input.username,
       authType: input.authType,
       notes: input.notes,
+      workspaceRoot: input.workspaceRoot,
+      repoUrl: input.repoUrl,
       facts: input.facts,
       lastStatus: input.lastStatus,
       lastSeenAt: input.lastSeenAt,
@@ -317,6 +341,8 @@ export namespace VM {
       private_key: input.privateKey ?? null,
       passphrase: input.passphrase ?? null,
       notes: input.notes ?? null,
+      workspace_root: input.workspaceRoot ?? null,
+      repo_url: input.repoUrl ?? null,
       os_name: input.facts?.osName ?? null,
       os_version: input.facts?.osVersion ?? null,
       kernel: input.facts?.kernel ?? null,
@@ -344,7 +370,9 @@ export namespace VM {
       privateKey: row.private_key ?? undefined,
       passphrase: row.passphrase ?? undefined,
       notes: row.notes ?? undefined,
-      facts: facts(row),
+      workspaceRoot: row.workspace_root ?? undefined,
+      repoUrl: row.repo_url ?? undefined,
+      facts: shape(row),
       lastStatus: Status.parse(row.last_status),
       lastSeenAt: row.last_seen_at ?? undefined,
       time: {
@@ -367,6 +395,7 @@ export namespace VM {
       summary: row.summary ?? undefined,
       exitCode: row.exit_code ?? undefined,
       transcript: row.transcript ?? undefined,
+      transcriptPath: row.transcript_path ?? undefined,
       artifacts: row.artifacts ?? undefined,
       startedAt: row.started_at,
       endedAt: row.ended_at ?? undefined,
@@ -457,6 +486,60 @@ export namespace VM {
     return info
   }
 
+  export async function facts(input: {
+    conn: Connection
+    vmID: string
+  }) {
+    if (input.conn.facts) return input.conn.facts
+    if (!input.conn.learning) {
+      input.conn.learning = VMSSH.facts(input.conn.client)
+        .then(async (facts) => {
+          input.conn.facts = facts
+          await updateProbe({
+            vmID: input.vmID,
+            lastStatus: "ok",
+            lastSeenAt: Date.now(),
+            facts,
+          }).catch(() => undefined)
+          return facts
+        })
+        .catch(async (err) => {
+          await updateProbe({
+            vmID: input.vmID,
+            lastStatus: "ok",
+            lastSeenAt: Date.now(),
+          }).catch(() => undefined)
+          throw err
+        })
+        .finally(() => {
+          input.conn.learning = undefined
+        })
+    }
+    return input.conn.learning
+  }
+
+  export async function shell(input: {
+    conn: Connection
+  }) {
+    if (input.conn.shell) return input.conn.shell
+    if (!input.conn.shelling) {
+      input.conn.shelling = VMSSH.shell(input.conn.client).then((shell) => {
+        input.conn.shell = shell
+        return shell
+      }).finally(() => {
+        input.conn.shelling = undefined
+      })
+    }
+    return input.conn.shelling
+  }
+
+  export function sftp(input: {
+    conn: Connection
+  }) {
+    if (!input.conn.sftp) input.conn.sftp = VMSSH.sftp(input.conn.client)
+    return input.conn.sftp
+  }
+
   export async function testDraft(input: z.input<typeof Draft>) {
     const now = Date.now()
     const data = normalize(input)
@@ -536,18 +619,15 @@ export namespace VM {
         auth: auth(input.vm),
         abort: input.abort,
       })
-      const facts = await VMSSH.facts(next.client).catch(() => undefined)
-      await updateProbe({
-        vmID: input.vm.id,
-        lastStatus: "ok",
-        lastSeenAt: Date.now(),
-        facts,
-      }).catch(() => undefined)
-      const value = {
+      const value: Connection = {
         ...next,
         time: Date.now(),
       }
       state().conn.set(key, value)
+      await facts({
+        conn: value,
+        vmID: input.vm.id,
+      }).catch(() => undefined)
       return value
     } catch (err) {
       await updateProbe({
@@ -720,6 +800,7 @@ export namespace VM {
       status: "running",
       summary: input.summary,
       transcript: undefined,
+      transcriptPath: undefined,
       artifacts: undefined,
       exitCode: undefined,
       startedAt: now,
@@ -743,6 +824,7 @@ export namespace VM {
           summary: result.summary ?? null,
           exit_code: result.exitCode ?? null,
           transcript: result.transcript ?? null,
+          transcript_path: result.transcriptPath ?? null,
           artifacts: result.artifacts,
           started_at: result.startedAt,
           ended_at: result.endedAt ?? null,
@@ -761,6 +843,7 @@ export namespace VM {
     summary?: string
     exitCode?: number
     transcript?: string
+    transcriptPath?: string
     artifacts?: Artifact[]
   }) {
     const row = Database.use((db) =>
@@ -771,6 +854,7 @@ export namespace VM {
           summary: input.summary ?? null,
           exit_code: input.exitCode ?? null,
           transcript: input.transcript ?? null,
+          transcript_path: input.transcriptPath ?? null,
           artifacts: input.artifacts,
           ended_at: Date.now(),
           time_updated: Date.now(),

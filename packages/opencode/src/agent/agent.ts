@@ -10,6 +10,7 @@ import PROMPT_GENERATE from "./generate.txt"
 import PROMPT_COMPACTION from "./prompt/compaction.txt"
 import PROMPT_EXECUTE from "./prompt/execute.txt"
 import PROMPT_EXPLORE from "./prompt/explore.txt"
+import PROMPT_RUNBOOK_PLANNER from "./prompt/runbook-planner.txt"
 import PROMPT_SUMMARY from "./prompt/summary.txt"
 import PROMPT_TITLE from "./prompt/title.txt"
 import { PermissionNext } from "@/permission/next"
@@ -168,6 +169,45 @@ export namespace Agent {
         options: {},
         mode: "subagent",
         native: true,
+      },
+      "runbook-planner": {
+        name: "runbook-planner",
+        description: "Hidden planner that materializes session runbooks from user sources, docs, and VM inventory.",
+        permission: PermissionNext.merge(
+          defaults,
+          PermissionNext.fromConfig({
+            "*": "deny",
+            question: "allow",
+            read: "allow",
+            glob: "allow",
+            grep: "allow",
+            webfetch: "allow",
+            websearch: "allow",
+            vm_list: "allow",
+            vm_test: "allow",
+            write: {
+              "*": "deny",
+              [path.join(".opencode", "plans", "*.md")]: "allow",
+              [path.relative(Instance.worktree, path.join(Global.Path.data, "plans", "*.md"))]: "allow",
+            },
+            edit: {
+              "*": "deny",
+              [path.join(".opencode", "plans", "*.md")]: "allow",
+              [path.relative(Instance.worktree, path.join(Global.Path.data, "plans", "*.md"))]: "allow",
+            },
+            external_directory: {
+              "*": "ask",
+              [path.join(Global.Path.data, "plans", "*")]: "allow",
+              ...Object.fromEntries(whitelistedDirs.map((dir) => [dir, "allow"])),
+            },
+          }),
+          user,
+        ),
+        options: {},
+        mode: "subagent",
+        native: true,
+        hidden: true,
+        prompt: PROMPT_RUNBOOK_PLANNER,
       },
       compaction: {
         name: "compaction",

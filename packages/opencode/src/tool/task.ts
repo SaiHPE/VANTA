@@ -32,10 +32,11 @@ export const TaskTool = Tool.define("task", async (ctx) => {
   const accessibleAgents = caller
     ? agents.filter((a) => PermissionNext.evaluate("task", a.name, caller.permission).action !== "deny")
     : agents
+  const visibleAgents = accessibleAgents.filter((a) => a.hidden !== true)
 
   const description = DESCRIPTION.replace(
     "{agents}",
-    accessibleAgents
+    visibleAgents
       .map((a) => `- ${a.name}: ${a.description ?? "This subagent should only be called manually by the user."}`)
       .join("\n"),
   )

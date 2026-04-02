@@ -9,14 +9,14 @@ describe("tool.registry", () => {
   test("loads tools from .opencode/tool (singular)", async () => {
     await using tmp = await tmpdir({
       init: async (dir) => {
-        const opencodeDir = path.join(dir, ".opencode")
-        await fs.mkdir(opencodeDir, { recursive: true })
+        const root = path.join(dir, ".opencode")
+        await fs.mkdir(root, { recursive: true })
 
-        const toolDir = path.join(opencodeDir, "tool")
-        await fs.mkdir(toolDir, { recursive: true })
+        const dirpath = path.join(root, "tool")
+        await fs.mkdir(dirpath, { recursive: true })
 
         await Bun.write(
-          path.join(toolDir, "hello.ts"),
+          path.join(dirpath, "hello.ts"),
           [
             "export default {",
             "  description: 'hello tool',",
@@ -43,14 +43,14 @@ describe("tool.registry", () => {
   test("loads tools from .opencode/tools (plural)", async () => {
     await using tmp = await tmpdir({
       init: async (dir) => {
-        const opencodeDir = path.join(dir, ".opencode")
-        await fs.mkdir(opencodeDir, { recursive: true })
+        const root = path.join(dir, ".opencode")
+        await fs.mkdir(root, { recursive: true })
 
-        const toolsDir = path.join(opencodeDir, "tools")
-        await fs.mkdir(toolsDir, { recursive: true })
+        const dirpath = path.join(root, "tools")
+        await fs.mkdir(dirpath, { recursive: true })
 
         await Bun.write(
-          path.join(toolsDir, "hello.ts"),
+          path.join(dirpath, "hello.ts"),
           [
             "export default {",
             "  description: 'hello tool',",
@@ -77,14 +77,14 @@ describe("tool.registry", () => {
   test("loads tools with external dependencies without crashing", async () => {
     await using tmp = await tmpdir({
       init: async (dir) => {
-        const opencodeDir = path.join(dir, ".opencode")
-        await fs.mkdir(opencodeDir, { recursive: true })
+        const root = path.join(dir, ".opencode")
+        await fs.mkdir(root, { recursive: true })
 
-        const toolsDir = path.join(opencodeDir, "tools")
-        await fs.mkdir(toolsDir, { recursive: true })
+        const dirpath = path.join(root, "tools")
+        await fs.mkdir(dirpath, { recursive: true })
 
         await Bun.write(
-          path.join(opencodeDir, "package.json"),
+          path.join(root, "package.json"),
           JSON.stringify({
             name: "custom-tools",
             dependencies: {
@@ -95,7 +95,7 @@ describe("tool.registry", () => {
         )
 
         await Bun.write(
-          path.join(toolsDir, "cowsay.ts"),
+          path.join(dirpath, "cowsay.ts"),
           [
             "import { say } from 'cowsay'",
             "export default {",
@@ -116,6 +116,21 @@ describe("tool.registry", () => {
       fn: async () => {
         const ids = await ToolRegistry.ids()
         expect(ids).toContain("cowsay")
+      },
+    })
+  })
+
+  test("websearch is available for ollama models", async () => {
+    await using tmp = await tmpdir()
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const tools = await ToolRegistry.tools({
+          providerID: "ollama",
+          modelID: "qwen3.5:35b",
+        })
+        expect(tools.some((tool) => tool.id === "websearch")).toBe(true)
+        expect(tools.some((tool) => tool.id === "webfetch")).toBe(true)
       },
     })
   })

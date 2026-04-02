@@ -1,6 +1,7 @@
 import { describe, test, expect, afterAll } from "bun:test"
 import { Truncate } from "../../src/tool/truncation"
 import { Identifier } from "../../src/id/id"
+import { Filesystem } from "../../src/util/filesystem"
 import fs from "fs/promises"
 import path from "path"
 

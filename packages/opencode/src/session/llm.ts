@@ -4,13 +4,16 @@ import { Log } from "@/util/log"
 import {
   streamText,
   wrapLanguageModel,
+  extractReasoningMiddleware,
   type ModelMessage,
   type StreamTextResult,
   type Tool,
   type ToolSet,
+  type LanguageModelMiddleware,
   tool,
   jsonSchema,
 } from "ai"
+import type { LanguageModelV2StreamPart } from "@ai-sdk/provider"
 import { mergeDeep, pipe } from "remeda"
 import { ProviderTransform } from "@/provider/transform"
 import { Config } from "@/config/config"
@@ -25,6 +28,238 @@ import { PermissionNext } from "@/permission/next"
 export namespace LLM {
   const log = Log.create({ service: "llm" })
   export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
+  const OPEN = "<tool_call>"
+  const CLOSE = "</tool_call>"
+
+  type Kind = "text" | "reasoning"
+  type Part = Extract<LanguageModelV2StreamPart, { type: "text-delta" } | { type: "reasoning-delta" }>
+  type End = Extract<LanguageModelV2StreamPart, { type: "text-end" } | { type: "reasoning-end" }>
+  type Item = {
+    kind: Kind
+    id: string
+    mode: "plain" | "call"
+    buf: string
+    call: string
+    seq: number
+  }
+
+  function edge(text: string, tag: string) {
+    if (!text.length) return
+    const hit = text.indexOf(tag)
+    if (hit !== -1) return hit
+    for (let i = text.length - 1; i >= 0; i--) {
+      if (tag.startsWith(text.slice(i))) return i
+    }
+  }
+
+  function parse(text: string) {
+    const raw = text.trim()
+    if (!raw) return
+    try {
+      const obj = JSON.parse(raw)
+      if (!obj || typeof obj !== "object" || Array.isArray(obj)) return
+      const rec = obj as Record<string, unknown>
+      const name =
+        typeof rec.name === "string"
+          ? rec.name
+          : typeof rec.tool === "string"
+            ? rec.tool
+            : typeof rec.toolName === "string"
+              ? rec.toolName
+              : undefined
+      if (!name) return
+      const arg = rec.arguments ?? rec.args ?? rec.input ?? {}
+      const val =
+        typeof arg === "string"
+          ? JSON.parse(arg)
+          : arg
+      if (!val || typeof val !== "object" || Array.isArray(val)) return
+      return {
+        name,
+        input: JSON.stringify(val),
+      }
+    } catch {
+      return
+    }
+  }
+
+  export function qwen(model: Pick<Provider.Model, "id">) {
+    return model.id.toLowerCase().includes("qwen")
+  }
+
+  export function leaked(parts: MessageV2.Part[]) {
+    const pseudo = parts.reduce((sum, part) => {
+      if (part.type !== "text" && part.type !== "reasoning") return sum
+      return sum + (part.text.match(/<tool_call>/g)?.length ?? 0)
+    }, 0)
+    if (pseudo === 0) return false
+    const tools = parts.filter((part) => part.type === "tool").length
+    return pseudo > tools
+  }
+
+  export function qwenMiddleware(): LanguageModelMiddleware {
+    return {
+      middlewareVersion: "v2",
+      wrapStream: async ({ doStream }) => {
+        const { stream, ...rest } = await doStream()
+        const items = new Map<string, Item>()
+        const key = (kind: Kind, id: string) => `${kind}:${id}`
+        const get = (kind: Kind, id: string) => {
+          const k = key(kind, id)
+          const hit = items.get(k)
+          if (hit) return hit
+          const next = {
+            kind,
+            id,
+            mode: "plain" as const,
+            buf: "",
+            call: "",
+            seq: 0,
+          }
+          items.set(k, next)
+          return next
+        }
+        const put = (
+          ctl: TransformStreamDefaultController<LanguageModelV2StreamPart>,
+          kind: Kind,
+          id: string,
+          delta: string,
+          meta?: Part["providerMetadata"],
+        ) => {
+          if (!delta) return
+          ctl.enqueue({
+            type: kind === "text" ? "text-delta" : "reasoning-delta",
+            id,
+            delta,
+            providerMetadata: meta,
+          })
+        }
+        const call = (
+          ctl: TransformStreamDefaultController<LanguageModelV2StreamPart>,
+          item: Item,
+          meta?: Part["providerMetadata"],
+        ) => {
+          const next = parse(item.call)
+          if (!next) {
+            put(ctl, item.kind, item.id, `${OPEN}${item.call}${CLOSE}`, meta)
+            return
+          }
+          const id = `qwen-${item.kind}-${item.id}-${item.seq++}`
+          ctl.enqueue({
+            type: "tool-input-start",
+            id,
+            toolName: next.name,
+            providerMetadata: meta,
+          })
+          ctl.enqueue({
+            type: "tool-input-delta",
+            id,
+            delta: next.input,
+            providerMetadata: meta,
+          })
+          ctl.enqueue({
+            type: "tool-input-end",
+            id,
+            providerMetadata: meta,
+          })
+          ctl.enqueue({
+            type: "tool-call",
+            toolCallId: id,
+            toolName: next.name,
+            input: next.input,
+            providerMetadata: meta,
+          })
+        }
+        const run = (
+          ctl: TransformStreamDefaultController<LanguageModelV2StreamPart>,
+          item: Item,
+          meta?: Part["providerMetadata"],
+        ) => {
+          while (true) {
+            if (item.mode === "plain") {
+              const hit = edge(item.buf, OPEN)
+              if (hit === undefined) {
+                put(ctl, item.kind, item.id, item.buf, meta)
+                item.buf = ""
+                return
+              }
+              put(ctl, item.kind, item.id, item.buf.slice(0, hit), meta)
+              if (hit + OPEN.length > item.buf.length) {
+                item.buf = item.buf.slice(hit)
+                return
+              }
+              item.buf = item.buf.slice(hit + OPEN.length)
+              item.mode = "call"
+              item.call = ""
+              continue
+            }
+            const hit = edge(item.buf, CLOSE)
+            if (hit === undefined) {
+              item.call += item.buf
+              item.buf = ""
+              return
+            }
+            item.call += item.buf.slice(0, hit)
+            if (hit + CLOSE.length > item.buf.length) {
+              item.buf = item.buf.slice(hit)
+              return
+            }
+            item.buf = item.buf.slice(hit + CLOSE.length)
+            call(ctl, item, meta)
+            item.mode = "plain"
+            item.call = ""
+          }
+        }
+        const flush = (
+          ctl: TransformStreamDefaultController<LanguageModelV2StreamPart>,
+          item: Item,
+          meta?: Part["providerMetadata"],
+        ) => {
+          if (item.mode === "call") {
+            put(ctl, item.kind, item.id, `${OPEN}${item.call}${item.buf}`, meta)
+          } else {
+            put(ctl, item.kind, item.id, item.buf, meta)
+          }
+          item.mode = "plain"
+          item.buf = ""
+          item.call = ""
+        }
+        return {
+          stream: stream.pipeThrough(
+            new TransformStream({
+              transform: (chunk, ctl) => {
+                if (chunk.type === "text-delta" || chunk.type === "reasoning-delta") {
+                  const kind = chunk.type === "text-delta" ? "text" : "reasoning"
+                  const item = get(kind, chunk.id)
+                  item.buf += chunk.delta
+                  run(ctl, item, chunk.providerMetadata)
+                  return
+                }
+                if (chunk.type === "text-end" || chunk.type === "reasoning-end") {
+                  const kind = chunk.type === "text-end" ? "text" : "reasoning"
+                  const item = items.get(key(kind, chunk.id))
+                  if (item) {
+                    flush(ctl, item, chunk.providerMetadata)
+                    items.delete(key(kind, chunk.id))
+                  }
+                  ctl.enqueue(chunk as End)
+                  return
+                }
+                if (chunk.type === "finish") {
+                  for (const item of items.values()) {
+                    flush(ctl, item)
+                  }
+                  items.clear()
+                }
+                ctl.enqueue(chunk)
+              },
+            }),
+          ),
+          ...rest,
+        }
+      },
+    }
+  }
 
   export type StreamInput = {
     user: MessageV2.User
@@ -231,6 +466,15 @@ export namespace LLM {
               return args.params
             },
           },
+          ...(qwen(input.model)
+            ? [
+                qwenMiddleware(),
+                extractReasoningMiddleware({
+                  tagName: "think",
+                  startWithReasoning: true,
+                }),
+              ]
+            : []),
         ],
       }),
       experimental_telemetry: {

@@ -13,6 +13,8 @@ export namespace Identifier {
     tool: "tool",
     vm: "vm",
     vm_activity: "vma",
+    runbook_run: "rbr",
+    runbook_step: "rbs",
   } as const
 
   export function schema(prefix: keyof typeof prefixes) {

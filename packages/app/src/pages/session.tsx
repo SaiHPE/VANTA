@@ -1,10 +1,12 @@
 import type { UserMessage } from "@opencode-ai/sdk/v2"
+import { Button } from "@opencode-ai/ui/button"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import {
   onCleanup,
   Show,
   Match,
   Switch,
+  For,
   createMemo,
   createEffect,
   createComputed,
@@ -21,6 +23,7 @@ import { ResizeHandle } from "@opencode-ai/ui/resize-handle"
 import { Select } from "@opencode-ai/ui/select"
 import { createAutoScroll } from "@opencode-ai/ui/hooks"
 import { Mark } from "@opencode-ai/ui/logo"
+import { showToast } from "@opencode-ai/ui/toast"
 import { base64Encode, checksum } from "@opencode-ai/util/encode"
 import { useNavigate, useParams, useSearchParams } from "@solidjs/router"
 import { NewSessionView, SessionHeader } from "@/components/session"
@@ -362,6 +365,44 @@ export default function Page() {
     if (!view().reviewPanel.opened()) view().reviewPanel.open()
   }
 
+  const openRunbook = () => {
+    const rel = runpath()
+    if (!rel) {
+      const value = runbook()?.path
+      if (!value) return
+      showToast({
+        title: "Runbook path",
+        description: value,
+      })
+      return
+    }
+    const tab = file.tab(rel)
+    tabs().open(tab)
+    tabs().setActive(tab)
+    void file.load(rel)
+  }
+
+  const actRunbook = async (kind: "execute" | "resume" | "cancel") => {
+    const id = params.id
+    const run = runbook()?.run
+    if (!id) return
+    if ((kind === "resume" || kind === "cancel") && !run?.id) return
+    setRunbox("busy", kind)
+    try {
+      if (kind === "execute") await sync.session.runbookExecute(id)
+      if (kind === "resume") await sync.session.runbookResume({ runID: run!.id, sessionID: id })
+      if (kind === "cancel") await sync.session.runbookCancel({ runID: run!.id, sessionID: id })
+    } catch (err) {
+      showToast({
+        variant: "error",
+        title: language.t("common.requestFailed"),
+        description: err instanceof Error ? err.message : String(err),
+      })
+    } finally {
+      setRunbox("busy", "")
+    }
+  }
+
   createEffect(() => {
     const active = tabs().active()
     if (!active) return
@@ -371,6 +412,7 @@ export default function Page() {
   })
 
   const info = createMemo(() => (params.id ? sync.session.get(params.id) : undefined))
+  const runbook = createMemo(() => (params.id ? sync.data.runbook[params.id] : undefined))
   const diffs = createMemo(() => (params.id ? (sync.data.session_diff[params.id] ?? []) : []))
   const reviewCount = createMemo(() => Math.max(info()?.summary?.files ?? 0, diffs().length))
   const hasReview = createMemo(() => reviewCount() > 0)
@@ -390,6 +432,32 @@ export default function Page() {
     const id = params.id
     if (!id) return false
     return sync.session.history.loading(id)
+  })
+  const runstep = createMemo(() => {
+    const state = runbook()
+    const idx = state?.run?.stepIdx
+    if (idx === undefined) return undefined
+    return (state?.steps ?? []).find((item) => item.stepIdx === idx)
+  })
+  const runbookVisible = createMemo(() => {
+    return !!runbook()?.exists || !!runbook()?.run
+  })
+  const runpath = createMemo(() => {
+    const value = runbook()?.path
+    if (!value) return
+    const dir = sync.directory.replaceAll("\\", "/")
+    const full = value.replaceAll("\\", "/")
+    if (full === dir) return ""
+    if (!full.startsWith(dir + "/")) return
+    return full.slice(dir.length + 1)
+  })
+  const runitems = createMemo(() => (runbook()?.steps ?? []).slice().sort((a, b) => a.stepIdx - b.stepIdx))
+  const runslice = createMemo(() => {
+    const items = runitems()
+    if (items.length <= 6) return items
+    const idx = runbook()?.run?.stepIdx ?? items.length - 1
+    const start = Math.max(0, idx - 2)
+    return items.slice(start, start + 6)
   })
 
   const userMessages = createMemo(
@@ -431,6 +499,9 @@ export default function Page() {
     changes: "session" as "session" | "turn",
     newSessionWorktree: "main",
     deferRender: false,
+  })
+  const [runbox, setRunbox] = createStore({
+    busy: "" as "" | "execute" | "resume" | "cancel",
   })
 
   createComputed((prev) => {
@@ -521,6 +592,7 @@ export default function Page() {
       untrack(() => {
         void sync.session.sync(id)
         void sync.session.todo(id)
+        void sync.session.runbook(id)
       })
     }),
   )
@@ -1204,50 +1276,136 @@ export default function Page() {
           <div class="flex-1 min-h-0 overflow-hidden">
             <Switch>
               <Match when={params.id}>
-                <Show when={activeMessage()}>
-                  <MessageTimeline
-                    mobileChanges={mobileChanges()}
-                    mobileFallback={reviewContent({
-                      diffStyle: "unified",
-                      classes: {
-                        root: "pb-8",
-                        header: "px-4",
-                        container: "px-4",
-                      },
-                      loadingClass: "px-4 py-4 text-text-weak",
-                      emptyClass: "h-full pb-30 flex flex-col items-center justify-center text-center gap-6",
-                    })}
-                    scroll={ui.scroll}
-                    onResumeScroll={resumeScroll}
-                    setScrollRef={setScrollRef}
-                    onScheduleScrollState={scheduleScrollState}
-                    onAutoScrollHandleScroll={autoScroll.handleScroll}
-                    onMarkScrollGesture={markScrollGesture}
-                    hasScrollGesture={hasScrollGesture}
-                    isDesktop={isDesktop()}
-                    onScrollSpyScroll={scrollSpy.onScroll}
-                    onTurnBackfillScroll={historyWindow.onScrollerScroll}
-                    onAutoScrollInteraction={autoScroll.handleInteraction}
-                    centered={centered()}
-                    setContentRef={(el) => {
-                      content = el
-                      autoScroll.contentRef(el)
+                <div class="h-full flex flex-col">
+                  <Show when={runbookVisible()}>
+                    <div class="border-b border-border-weak-base bg-surface-panel px-4 py-3">
+                      <div class="flex items-start justify-between gap-3">
+                        <div class="min-w-0">
+                          <div class="text-13-semibold text-text-strong">{runbook()?.plan?.title ?? "Runbook"}</div>
+                          <div class="mt-1 text-12-regular text-text-weak">
+                            {runbook()?.run
+                              ? `Status: ${runbook()?.run?.status}`
+                              : runbook()?.exists
+                                ? "Status: ready"
+                                : "Status: missing"}
+                            <Show when={runstep()}>
+                              {(item) => <span>{` · Current step: ${item().title}`}</span>}</Show>
+                          </div>
+                          <Show when={runbook()?.run?.error}>
+                            {(err) => <div class="mt-1 text-12-regular text-danger-base">{err()}</div>}
+                          </Show>
+                          <div class="mt-2 break-all text-11-regular text-text-weak">{runbook()?.path}</div>
+                        </div>
+                        <div class="flex shrink-0 items-center gap-2">
+                          <Show when={runpath() || runbook()?.path}>
+                            <Button size="small" variant="ghost" onClick={openRunbook}>
+                              Open
+                            </Button>
+                          </Show>
+                          <Show when={runbook()?.exists && !runbook()?.run}>
+                            <Button
+                              size="small"
+                              variant="secondary"
+                              disabled={runbox.busy !== ""}
+                              onClick={() => void actRunbook("execute")}
+                            >
+                              Start
+                            </Button>
+                          </Show>
+                          <Show when={runbook()?.run && ["paused", "failed"].includes(runbook()!.run!.status)}>
+                            <Button
+                              size="small"
+                              variant="secondary"
+                              disabled={runbox.busy !== ""}
+                              onClick={() => void actRunbook("resume")}
+                            >
+                              Resume
+                            </Button>
+                          </Show>
+                          <Show when={runbook()?.run && ["ready", "running", "paused"].includes(runbook()!.run!.status)}>
+                            <Button
+                              size="small"
+                              variant="ghost"
+                              disabled={runbox.busy !== ""}
+                              onClick={() => void actRunbook("cancel")}
+                            >
+                              Cancel
+                            </Button>
+                          </Show>
+                        </div>
+                      </div>
+                      <Show when={(runbook()?.plan?.sources?.length ?? 0) > 0}>
+                        <div class="mt-3 flex flex-wrap gap-2">
+                          <For each={runbook()?.plan?.sources ?? []}>
+                            {(item) => (
+                              <div class="rounded-md border border-border-weak-base px-2 py-1 text-11-regular text-text-weak">
+                                {item.label ?? item.url ?? item.path ?? item.kind}
+                              </div>
+                            )}
+                          </For>
+                        </div>
+                      </Show>
+                      <Show when={runslice().length > 0}>
+                        <div class="mt-3 grid gap-1">
+                          <For each={runslice()}>
+                            {(item) => (
+                              <div class="flex items-center justify-between gap-3 rounded-md border border-border-weak-base px-2 py-1.5 text-12-regular">
+                                <div class="min-w-0 truncate">{item.title}</div>
+                                <div class="shrink-0 text-text-weak">{item.status}</div>
+                              </div>
+                            )}
+                          </For>
+                        </div>
+                      </Show>
+                    </div>
+                  </Show>
+                  <div class="flex-1 min-h-0 overflow-hidden">
+                    <Show when={activeMessage()}>
+                      <MessageTimeline
+                        mobileChanges={mobileChanges()}
+                        mobileFallback={reviewContent({
+                          diffStyle: "unified",
+                          classes: {
+                            root: "pb-8",
+                            header: "px-4",
+                            container: "px-4",
+                          },
+                          loadingClass: "px-4 py-4 text-text-weak",
+                          emptyClass: "h-full pb-30 flex flex-col items-center justify-center text-center gap-6",
+                        })}
+                        scroll={ui.scroll}
+                        onResumeScroll={resumeScroll}
+                        setScrollRef={setScrollRef}
+                        onScheduleScrollState={scheduleScrollState}
+                        onAutoScrollHandleScroll={autoScroll.handleScroll}
+                        onMarkScrollGesture={markScrollGesture}
+                        hasScrollGesture={hasScrollGesture}
+                        isDesktop={isDesktop()}
+                        onScrollSpyScroll={scrollSpy.onScroll}
+                        onTurnBackfillScroll={historyWindow.onScrollerScroll}
+                        onAutoScrollInteraction={autoScroll.handleInteraction}
+                        centered={centered()}
+                        setContentRef={(el) => {
+                          content = el
+                          autoScroll.contentRef(el)
 
-                      const root = scroller
-                      if (root) scheduleScrollState(root)
-                    }}
-                    turnStart={historyWindow.turnStart()}
-                    historyMore={historyMore()}
-                    historyLoading={historyLoading()}
-                    onLoadEarlier={() => {
-                      void historyWindow.loadAndReveal()
-                    }}
-                    renderedUserMessages={historyWindow.renderedUserMessages()}
-                    anchor={anchor}
-                    onRegisterMessage={scrollSpy.register}
-                    onUnregisterMessage={scrollSpy.unregister}
-                  />
-                </Show>
+                          const root = scroller
+                          if (root) scheduleScrollState(root)
+                        }}
+                        turnStart={historyWindow.turnStart()}
+                        historyMore={historyMore()}
+                        historyLoading={historyLoading()}
+                        onLoadEarlier={() => {
+                          void historyWindow.loadAndReveal()
+                        }}
+                        renderedUserMessages={historyWindow.renderedUserMessages()}
+                        anchor={anchor}
+                        onRegisterMessage={scrollSpy.register}
+                        onUnregisterMessage={scrollSpy.unregister}
+                      />
+                    </Show>
+                  </div>
+                </div>
               </Match>
               <Match when={true}>
                 <NewSessionView

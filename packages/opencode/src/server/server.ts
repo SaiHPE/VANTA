@@ -38,6 +38,7 @@ import { PermissionRoutes } from "./routes/permission"
 import { GlobalRoutes } from "./routes/global"
 import { MDNS } from "./mdns"
 import { VmRoutes } from "./routes/vm"
+import { RunbookRoutes } from "./routes/runbook"
 import path from "path"
 import { Filesystem } from "../util/filesystem"
 
@@ -167,6 +168,7 @@ export namespace Server {
         )
         .route("/project", ProjectRoutes())
         .route("/vm", VmRoutes())
+        .route("/runbook", RunbookRoutes())
         .route("/pty", PtyRoutes())
         .route("/config", ConfigRoutes())
         .route("/experimental", ExperimentalRoutes())

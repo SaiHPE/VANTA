@@ -1,6 +1,10 @@
+import fs from "node:fs/promises"
+import os from "node:os"
+import path from "node:path"
 import z from "zod"
 import TurndownService from "turndown"
 import { abortAfterAny } from "../util/abort"
+import { Process } from "../util/process"
 import DESCRIPTION from "./webfetch.txt"
 import { Tool } from "./tool"
 
@@ -19,17 +23,14 @@ export const WebFetchTool = Tool.define("webfetch", {
     timeout: z.number().describe("Optional timeout in seconds (max 120)").optional(),
   }),
   async execute(params, ctx) {
-    // Validate URL
-    if (!params.url.startsWith("http://") && !params.url.startsWith("https://")) {
-      throw new Error("URL must start with http:// or https://")
-    }
+    const url = norm(params.url)
 
     await ctx.ask({
       permission: "webfetch",
-      patterns: [params.url],
+      patterns: [...new Set([params.url, url])],
       always: ["*"],
       metadata: {
-        url: params.url,
+        url,
         format: params.format,
         timeout: params.timeout,
       },
@@ -61,16 +62,12 @@ export const WebFetchTool = Tool.define("webfetch", {
       Accept: acceptHeader,
       "Accept-Language": "en-US,en;q=0.9",
     }
-
-    const initial = await fetch(params.url, { signal, headers })
-
-    // Retry with honest UA if blocked by Cloudflare bot detection (TLS fingerprint mismatch)
-    const response =
-      initial.status === 403 && initial.headers.get("cf-mitigated") === "challenge"
-        ? await fetch(params.url, { signal, headers: { ...headers, "User-Agent": "opencode" } })
-        : initial
-
-    clearTimeout()
+    const response = await req({
+      url,
+      signal,
+      headers,
+      timeout,
+    }).finally(clearTimeout)
 
     if (!response.ok) {
       throw new Error(`Request failed with status code: ${response.status}`)
@@ -82,20 +79,19 @@ export const WebFetchTool = Tool.define("webfetch", {
       throw new Error("Response too large (exceeds 5MB limit)")
     }
 
-    const arrayBuffer = await response.arrayBuffer()
-    if (arrayBuffer.byteLength > MAX_RESPONSE_SIZE) {
+    if (response.body.byteLength > MAX_RESPONSE_SIZE) {
       throw new Error("Response too large (exceeds 5MB limit)")
     }
 
     const contentType = response.headers.get("content-type") || ""
     const mime = contentType.split(";")[0]?.trim().toLowerCase() || ""
-    const title = `${params.url} (${contentType})`
+    const title = `${response.url} (${contentType})`
 
     // Check if response is an image
     const isImage = mime.startsWith("image/") && mime !== "image/svg+xml" && mime !== "image/vnd.fastbidsheet"
 
     if (isImage) {
-      const base64Content = Buffer.from(arrayBuffer).toString("base64")
+      const base64Content = Buffer.from(response.body).toString("base64")
       return {
         title,
         output: "Image fetched successfully",
@@ -110,7 +106,7 @@ export const WebFetchTool = Tool.define("webfetch", {
       }
     }
 
-    const content = new TextDecoder().decode(arrayBuffer)
+    const content = new TextDecoder().decode(response.body)
 
     // Handle content based on requested format and actual content type
     switch (params.format) {
@@ -160,6 +156,124 @@ export const WebFetchTool = Tool.define("webfetch", {
     }
   },
 })
+
+function norm(input: string) {
+  if (!URL.canParse(input)) {
+    throw new Error("URL must start with http:// or https://")
+  }
+  const url = new URL(input)
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("URL must start with http:// or https://")
+  }
+  if (url.protocol === "http:") url.protocol = "https:"
+  return url.toString()
+}
+
+async function req(input: {
+  url: string
+  signal: AbortSignal
+  headers: Record<string, string>
+  timeout: number
+}) {
+  if (process.platform === "win32" && process.env.NODE_ENV !== "test") {
+    return curl(input)
+  }
+  const initial = await fetch(input.url, {
+    signal: input.signal,
+    headers: input.headers,
+  })
+  const response =
+    initial.status === 403 && initial.headers.get("cf-mitigated") === "challenge"
+      ? await fetch(input.url, {
+          signal: input.signal,
+          headers: {
+            ...input.headers,
+            "User-Agent": "opencode",
+          },
+        })
+      : initial
+  return {
+    ok: response.ok,
+    status: response.status,
+    headers: response.headers,
+    body: new Uint8Array(await response.arrayBuffer()),
+    url: response.url || input.url,
+  }
+}
+
+async function curl(input: {
+  url: string
+  signal: AbortSignal
+  headers: Record<string, string>
+  timeout: number
+}) {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "opencode-webfetch-"))
+  const body = path.join(dir, "body")
+  const head = path.join(dir, "head")
+  try {
+    const out = await Process.run(
+      [
+        "curl.exe",
+        "--silent",
+        "--show-error",
+        "--location",
+        "--output",
+        body,
+        "--dump-header",
+        head,
+        "--max-time",
+        String(Math.max(1, Math.ceil(input.timeout / 1000))),
+        "--write-out",
+        "%{json}",
+        ...Object.entries(input.headers).flatMap(([key, value]) => ["--header", `${key}: ${value}`]),
+        input.url,
+      ],
+      {
+        abort: input.signal,
+        timeout: input.timeout,
+      },
+    )
+    const meta = JSON.parse(out.stdout.toString()) as {
+      http_code?: number
+      response_code?: number
+      url_effective?: string
+    }
+    const info = pick(await Bun.file(head).text())
+    const buf = await Bun.file(body).bytes()
+    const status = meta.response_code ?? meta.http_code ?? info.status
+    return {
+      ok: status >= 200 && status < 300,
+      status,
+      headers: info.headers,
+      body: buf,
+      url: meta.url_effective ?? input.url,
+    }
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true })
+  }
+}
+
+function pick(raw: string) {
+  const block = raw
+    .trim()
+    .split(/\r?\n\r?\n/)
+    .filter((item) => item.trim().startsWith("HTTP/"))
+    .at(-1)
+  const list = (block ?? "")
+    .split(/\r?\n/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+  const headers = new Headers()
+  list.slice(1).forEach((item) => {
+    const at = item.indexOf(":")
+    if (at < 0) return
+    headers.append(item.slice(0, at).trim(), item.slice(at + 1).trim())
+  })
+  return {
+    status: Number(list[0]?.split(/\s+/)[1] ?? 0),
+    headers,
+  }
+}
 
 async function extractTextFromHTML(html: string) {
   let text = ""

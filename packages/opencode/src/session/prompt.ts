@@ -699,6 +699,25 @@ export namespace SessionPrompt {
         break
       }
 
+      if (LLM.qwen(model)) {
+        const parts = await MessageV2.parts(processor.message.id)
+        if (LLM.leaked(parts)) {
+          processor.message.error = new MessageV2.APIError({
+            message: "Model emitted pseudo tool-call text instead of a structured tool call",
+            isRetryable: false,
+            metadata: {
+              code: "PSEUDO_TOOL_CALL",
+            },
+          }).toObject()
+          await Session.updateMessage(processor.message)
+          Bus.publish(Session.Event.Error, {
+            sessionID,
+            error: processor.message.error,
+          })
+          break
+        }
+      }
+
       // Check if model finished (finish reason is not "tool-calls" or "unknown")
       const modelFinished = processor.message.finish && !["tool-calls", "unknown"].includes(processor.message.finish)
 

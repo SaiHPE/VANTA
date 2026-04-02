@@ -3,6 +3,7 @@ import fs from "fs/promises"
 import os from "os"
 import path from "path"
 import { Client, type ConnectConfig, type SFTPWrapper } from "ssh2"
+import { VMWorkspace } from "./workspace"
 
 export namespace VMSSH {
   export type Auth = {
@@ -31,6 +32,13 @@ export namespace VMSSH {
     code?: number
     signal?: string
     timedOut: boolean
+  }
+
+  export type Workspace = {
+    workspaceDir: string
+    workspaceRef: string
+    workspaceRepo: string
+    repoUrl: string
   }
 
   function cfg(input: Auth, host: string): ConnectConfig {
@@ -131,6 +139,16 @@ export namespace VMSSH {
     }).catch(() => undefined)
   }
 
+  export async function shell(client: Client): Promise<"bash" | "sh"> {
+    const probe = await exec({
+      client,
+      command: "command -v bash >/dev/null 2>&1",
+      shell: "sh",
+      timeout: 10_000,
+    })
+    return probe.code === 0 ? "bash" : "sh"
+  }
+
   export async function exec(input: {
     client: Client
     command: string
@@ -213,12 +231,10 @@ export namespace VMSSH {
       })
     }
 
-    const shell = input.shell ?? "auto"
-    if (shell === "bash") return run("bash")
-    if (shell === "sh") return run("sh")
-    const probe = await run("sh", "command -v bash >/dev/null 2>&1")
-    if (probe.code === 0) return run("bash")
-    return run("sh")
+    const mode = input.shell ?? "auto"
+    if (mode === "bash") return run("bash")
+    if (mode === "sh") return run("sh")
+    return run(await shell(input.client))
   }
 
   export async function facts(client: Client): Promise<Facts> {
@@ -279,6 +295,7 @@ export namespace VMSSH {
     content?: string
     mode?: string
     createDirs?: boolean
+    sftp?: Promise<SFTPWrapper> | SFTPWrapper
   }) {
     if (!!input.srcPath === !!input.content) {
       throw new Error("Provide exactly one of srcPath or content")
@@ -296,7 +313,7 @@ export namespace VMSSH {
       if (input.createDirs !== false) {
         await mkdir(input.client, path.posix.dirname(input.dest))
       }
-      const sftpClient = await sftp(input.client)
+      const sftpClient = await (input.sftp ?? sftp(input.client))
       await once<void>((done) => {
         sftpClient.fastPut(file, input.dest, (err) => done(err as Error | undefined, undefined))
       })
@@ -319,10 +336,11 @@ export namespace VMSSH {
     client: Client
     remote: string
     localName?: string
+    sftp?: Promise<SFTPWrapper> | SFTPWrapper
   }) {
     const name = input.localName ?? path.posix.basename(input.remote)
     const file = path.join(os.tmpdir(), "opencode-vm-download-" + Math.random().toString(36).slice(2))
-    const sftpClient = await sftp(input.client)
+    const sftpClient = await (input.sftp ?? sftp(input.client))
     try {
       await once<void>((done) => {
         sftpClient.fastGet(input.remote, file, (err) => done(err as Error | undefined, undefined))
@@ -336,6 +354,80 @@ export namespace VMSSH {
       }
     } finally {
       await fs.rm(file, { force: true }).catch(() => undefined)
+    }
+  }
+
+  export async function workspace(input: {
+    client: Client
+    baseDir: string
+    projectID: string
+    repoUrl: string
+    ref: string
+  }): Promise<Workspace> {
+    const paths = VMWorkspace.paths({
+      root: input.baseDir,
+      projectID: input.projectID,
+      ref: input.ref,
+    })
+    const result = await exec({
+      client: input.client,
+      shell: "sh",
+      timeout: 120_000,
+      command: [
+        "set -eu",
+        "command -v git >/dev/null 2>&1 || { echo 'git is required on the VM' >&2; exit 1; }",
+        `repo=${quote(paths.repo)}`,
+        `wt=${quote(paths.wt)}`,
+        `url=${quote(input.repoUrl)}`,
+        `ref=${quote(input.ref)}`,
+        "dir=$(dirname \"$repo\")",
+        "mkdir -p \"$dir\"",
+        "if [ -e \"$repo\" ] && [ ! -d \"$repo\" ]; then",
+        "  echo \"workspace repo path is not a directory: $repo\" >&2",
+        "  exit 1",
+        "fi",
+        "if [ ! -d \"$repo/.git\" ] && [ ! -f \"$repo/.git\" ]; then",
+        "  git clone --no-checkout \"$url\" \"$repo\"",
+        "fi",
+        "current=$(git -C \"$repo\" remote get-url origin 2>/dev/null || true)",
+        "if [ -n \"$current\" ] && [ \"$current\" != \"$url\" ]; then",
+        "  echo \"workspace repo origin mismatch: expected $url got $current\" >&2",
+        "  exit 1",
+        "fi",
+        "if [ -z \"$current\" ]; then",
+        "  git -C \"$repo\" remote add origin \"$url\"",
+        "fi",
+        "git -C \"$repo\" fetch --prune origin \"$ref\"",
+        "rev=$(git -C \"$repo\" rev-parse FETCH_HEAD)",
+        "parent=$(dirname \"$wt\")",
+        "mkdir -p \"$parent\"",
+        "if [ -e \"$wt\" ] && [ ! -d \"$wt\" ]; then",
+        "  echo \"workspace path is not a directory: $wt\" >&2",
+        "  exit 1",
+        "fi",
+        "if [ -d \"$wt\" ]; then",
+        "  git -C \"$wt\" rev-parse --is-inside-work-tree >/dev/null 2>&1 || { echo \"workspace path is not a git worktree: $wt\" >&2; exit 1; }",
+        "else",
+        "  git -C \"$repo\" worktree add --force --detach \"$wt\" \"$rev\"",
+        "fi",
+        "git -C \"$wt\" reset --hard \"$rev\"",
+        "printf '%s\\n' \"$wt\" \"$rev\" \"$repo\" \"$url\"",
+      ].join("\n"),
+    })
+    if (result.code !== 0) {
+      throw new Error(result.stderr.trim() || result.stdout.trim() || `Failed to prepare workspace for ${input.ref}`)
+    }
+    const [workspaceDir = "", workspaceRef = "", workspaceRepo = "", repoUrl = ""] = result.stdout
+      .trim()
+      .split(/\r?\n/)
+    if (!workspaceDir || !workspaceRef || !workspaceRepo) {
+      throw new Error("Workspace preparation did not return the expected metadata")
+    }
+    return {
+      workspaceDir,
+      workspaceRef,
+      workspaceRepo,
+      repoUrl: repoUrl || input.repoUrl,
     }
   }
 }

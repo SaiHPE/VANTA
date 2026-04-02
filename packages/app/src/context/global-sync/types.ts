@@ -12,6 +12,7 @@ import type {
   Project,
   ProviderListResponse,
   QuestionRequest,
+  RunbookSessionState,
   Session,
   SessionStatus,
   Todo,
@@ -67,6 +68,9 @@ export type State = {
   vm: VmSummary[]
   vm_activity: {
     [vmID: string]: VmActivity[]
+  }
+  runbook: {
+    [sessionID: string]: RunbookSessionState | undefined
   }
   vcs: VcsInfo | undefined
   limit: number

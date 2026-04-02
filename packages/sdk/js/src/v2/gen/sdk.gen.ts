@@ -86,6 +86,10 @@ import type {
   QuestionRejectResponses,
   QuestionReplyErrors,
   QuestionReplyResponses,
+  RunbookCancelErrors,
+  RunbookCancelResponses,
+  RunbookResumeErrors,
+  RunbookResumeResponses,
   SessionAbortErrors,
   SessionAbortResponses,
   SessionChildrenErrors,
@@ -115,6 +119,10 @@ import type {
   SessionPromptResponses,
   SessionRevertErrors,
   SessionRevertResponses,
+  SessionRunbookErrors,
+  SessionRunbookExecuteErrors,
+  SessionRunbookExecuteResponses,
+  SessionRunbookResponses,
   SessionShellErrors,
   SessionShellResponses,
   SessionStatusErrors,
@@ -606,6 +614,8 @@ export class Vm extends HeyApiClient {
       privateKey?: string
       passphrase?: string
       notes?: string
+      workspaceRoot?: string
+      repoUrl?: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -626,6 +636,8 @@ export class Vm extends HeyApiClient {
             { in: "body", key: "privateKey" },
             { in: "body", key: "passphrase" },
             { in: "body", key: "notes" },
+            { in: "body", key: "workspaceRoot" },
+            { in: "body", key: "repoUrl" },
           ],
         },
       ],
@@ -639,6 +651,68 @@ export class Vm extends HeyApiClient {
         ...options?.headers,
         ...params.headers,
       },
+    })
+  }
+}
+
+export class Runbook extends HeyApiClient {
+  /**
+   * Resume runbook
+   *
+   * Resume a paused or failed runbook execution.
+   */
+  public resume<ThrowOnError extends boolean = false>(
+    parameters: {
+      runID: string
+      directory?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "runID" },
+            { in: "query", key: "directory" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<RunbookResumeResponses, RunbookResumeErrors, ThrowOnError>({
+      url: "/runbook/{runID}/resume",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Cancel runbook
+   *
+   * Cancel an active or paused runbook execution.
+   */
+  public cancel<ThrowOnError extends boolean = false>(
+    parameters: {
+      runID: string
+      directory?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "runID" },
+            { in: "query", key: "directory" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<RunbookCancelResponses, RunbookCancelErrors, ThrowOnError>({
+      url: "/runbook/{runID}/cancel",
+      ...options,
+      ...params,
     })
   }
 }
@@ -1421,6 +1495,70 @@ export class Session2 extends HeyApiClient {
     )
     return (options?.client ?? this.client).get<SessionTodoResponses, SessionTodoErrors, ThrowOnError>({
       url: "/session/{sessionID}/todo",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Get session runbook
+   *
+   * Retrieve the runbook file and latest run state for a session.
+   */
+  public runbook<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<SessionRunbookResponses, SessionRunbookErrors, ThrowOnError>({
+      url: "/session/{sessionID}/runbook",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Execute session runbook
+   *
+   * Create a run for the current session runbook and execute it deterministically.
+   */
+  public runbookExecute<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      SessionRunbookExecuteResponses,
+      SessionRunbookExecuteErrors,
+      ThrowOnError
+    >({
+      url: "/session/{sessionID}/runbook/execute",
       ...options,
       ...params,
     })
@@ -2997,6 +3135,11 @@ export class OpencodeClient extends HeyApiClient {
   private _vm?: Vm
   get vm(): Vm {
     return (this._vm ??= new Vm({ client: this.client }))
+  }
+
+  private _runbook?: Runbook
+  get runbook(): Runbook {
+    return (this._runbook ??= new Runbook({ client: this.client }))
   }
 
   private _pty?: Pty

@@ -30,6 +30,31 @@ async function withFetch(
 }
 
 describe("tool.webfetch", () => {
+  test("upgrades http urls to https", async () => {
+    let seen = ""
+    await withFetch(
+      async (input) => {
+        seen = String(input)
+        return new Response("<h1>ok</h1>", {
+          status: 200,
+          headers: { "content-type": "text/html; charset=utf-8" },
+        })
+      },
+      async () => {
+        await Instance.provide({
+          directory: projectRoot,
+          fn: async () => {
+            const webfetch = await WebFetchTool.init()
+            const result = await webfetch.execute({ url: "http://example.com/docs", format: "markdown" }, ctx)
+            expect(seen).toBe("https://example.com/docs")
+            expect(result.title).toContain("https://example.com/docs")
+            expect(result.output).toContain("ok")
+          },
+        })
+      },
+    )
+  })
+
   test("returns image responses as file attachments", async () => {
     const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])
     await withFetch(

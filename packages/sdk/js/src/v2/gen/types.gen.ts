@@ -737,6 +737,8 @@ export type VmSummary = {
   username: string
   authType: VmAuthType
   notes?: string
+  workspaceRoot?: string
+  repoUrl?: string
   facts?: VmFacts
   lastStatus: VmStatus
   lastSeenAt?: number
@@ -779,6 +781,7 @@ export type VmActivity = {
   summary?: string
   exitCode?: number
   transcript?: string
+  transcriptPath?: string
   artifacts?: Array<VmArtifact>
   startedAt: number
   endedAt?: number
@@ -796,6 +799,97 @@ export type EventVmActivityCreated = {
 export type EventVmActivityUpdated = {
   type: "vm.activity.updated"
   properties: VmActivity
+}
+
+export type RunbookRunStatus = "ready" | "running" | "paused" | "failed" | "completed" | "cancelled"
+
+export type RunbookSource = {
+  kind: "url" | "file" | "attachment" | "text"
+  role?: "primary" | "supporting"
+  label?: string
+  url?: string
+  path?: string
+  text?: string
+  fetched_at?: number
+}
+
+export type RunbookPauseReason = "binding" | "missing_fact" | "question" | "verify" | "approval" | "error"
+
+export type RunbookRun = {
+  id: string
+  sessionID: string
+  messageID?: string
+  path: string
+  status: RunbookRunStatus
+  stepIdx: number
+  bindings?: {
+    [key: string]: Array<string>
+  }
+  facts?: {
+    [key: string]: string
+  }
+  approval?: {
+    confirmed?: boolean
+    roles?: {
+      [key: string]: Array<string>
+    }
+  }
+  sourceBundle?: Array<RunbookSource>
+  pauseReason?: RunbookPauseReason
+  error?: string
+  time: {
+    created: number
+    updated: number
+    started?: number
+    ended?: number
+  }
+}
+
+export type EventRunbookRunUpdated = {
+  type: "runbook.run.updated"
+  properties: {
+    sessionID: string
+    run: RunbookRun
+  }
+}
+
+export type RunbookStepStatus = "pending" | "running" | "paused" | "failed" | "completed" | "cancelled"
+
+export type RunbookStepRecord = {
+  id: string
+  runID: string
+  sessionID: string
+  stepID: string
+  stepIdx: number
+  kind: "question" | "exec" | "upload" | "download" | "workspace_prepare"
+  title: string
+  attempt: number
+  status: RunbookStepStatus
+  summary?: string
+  outputPreview?: string
+  vmActivityIDs?: {
+    [key: string]: string
+  }
+  artifacts?: Array<{
+    name: string
+    mime: string
+    url: string
+  }>
+  error?: string
+  time: {
+    created: number
+    updated: number
+    started?: number
+    ended?: number
+  }
+}
+
+export type EventRunbookStepUpdated = {
+  type: "runbook.step.updated"
+  properties: {
+    sessionID: string
+    step: RunbookStepRecord
+  }
 }
 
 export type EventMcpToolsChanged = {
@@ -990,6 +1084,8 @@ export type Event =
   | EventVmDeleted
   | EventVmActivityCreated
   | EventVmActivityUpdated
+  | EventRunbookRunUpdated
+  | EventRunbookStepUpdated
   | EventMcpToolsChanged
   | EventMcpBrowserOpenFailed
   | EventCommandExecuted
@@ -1507,6 +1603,8 @@ export type VmDetail = {
   username: string
   authType: VmAuthType
   notes?: string
+  workspaceRoot?: string
+  repoUrl?: string
   facts?: VmFacts
   lastStatus: VmStatus
   lastSeenAt?: number
@@ -1530,6 +1628,170 @@ export type VmDraft = {
   privateKey?: string
   passphrase?: string
   notes?: string
+  workspaceRoot?: string
+  repoUrl?: string
+}
+
+export type RunbookSourcePolicy = "user_source_first" | "official_first"
+
+export type RunbookApproval = "once_with_exceptions" | "always"
+
+export type RunbookRole = {
+  match: Array<string>
+  min?: number
+  max?: number
+}
+
+export type RunbookInput = {
+  name: string
+  prompt: string
+  required?: boolean
+  secret?: boolean
+  default?: string
+}
+
+export type RunbookQuestionStep = {
+  id: string
+  phase?: string
+  title: string
+  kind: "question"
+  header?: string
+  question: string
+  options?: Array<{
+    label: string
+    description: string
+  }>
+  multiple?: boolean
+  custom?: boolean
+  save_as: string
+}
+
+export type RunbookTargets =
+  | {
+      type: "all"
+    }
+  | {
+      type: "roles"
+      roles: Array<string>
+    }
+  | {
+      type: "match"
+      match: Array<string>
+    }
+
+export type RunbookVerify = {
+  exit_codes?: Array<number>
+  stdout_contains?: Array<string>
+  stderr_not_contains?: Array<string>
+  facts_present?: Array<string>
+}
+
+export type RunbookStepApproval = "inherit" | "always"
+
+export type RunbookExecStep = {
+  id: string
+  phase?: string
+  title: string
+  kind: "exec"
+  intent: "read" | "write"
+  targets: RunbookTargets
+  mode?: "serial" | "parallel"
+  concurrency?: number
+  needs?: Array<string>
+  command: string
+  cwd?: string
+  shell?: "auto" | "bash" | "sh"
+  timeout_secs?: number
+  capture?: "none" | "json"
+  verify?: RunbookVerify
+  retries?: number
+  approval?: RunbookStepApproval
+}
+
+export type RunbookUploadStep = {
+  id: string
+  phase?: string
+  title: string
+  kind: "upload"
+  targets: RunbookTargets
+  mode?: "serial" | "parallel"
+  concurrency?: number
+  needs?: Array<string>
+  src_path?: string
+  content?: string
+  dest_path: string
+  file_mode?: string
+  create_dirs?: boolean
+  approval?: RunbookStepApproval
+}
+
+export type RunbookDownloadStep = {
+  id: string
+  phase?: string
+  title: string
+  kind: "download"
+  targets: RunbookTargets
+  mode?: "serial" | "parallel"
+  concurrency?: number
+  needs?: Array<string>
+  remote_path: string
+  local_name?: string
+  save_as?: string
+  approval?: RunbookStepApproval
+}
+
+export type RunbookWorkspacePrepareStep = {
+  id: string
+  phase?: string
+  title: string
+  kind: "workspace_prepare"
+  targets: {
+    type: "roles"
+    roles: Array<string>
+  }
+  mode?: "serial" | "parallel"
+  concurrency?: number
+  needs?: Array<string>
+  repo_url?: string
+  ref?: string
+  base_dir?: string
+  approval?: RunbookStepApproval
+}
+
+export type RunbookStep =
+  | RunbookQuestionStep
+  | RunbookExecStep
+  | RunbookUploadStep
+  | RunbookDownloadStep
+  | RunbookWorkspacePrepareStep
+
+export type RunbookDocument = {
+  schema: "newton.runbook/v1"
+  title: string
+  source_policy?: RunbookSourcePolicy
+  approval?: RunbookApproval
+  vm_scope?: {
+    read?: "all" | "declared_roles"
+    write?: "declared_roles" | "all"
+  }
+  sources?: Array<RunbookSource>
+  roles?: {
+    [key: string]: RunbookRole
+  }
+  inputs?: Array<RunbookInput>
+  steps: Array<RunbookStep>
+  body?: string
+  path?: string
+}
+
+export type RunbookSessionState = {
+  sessionID: string
+  path: string
+  exists: boolean
+  raw?: string
+  plan?: RunbookDocument
+  run?: RunbookRun
+  steps?: Array<RunbookStepRecord>
 }
 
 export type ProviderModel = {
@@ -1574,6 +1836,14 @@ export type ProviderModel = {
       read: number
       write: number
     }
+    experimentalOver200K?: {
+      input: number
+      output: number
+      cache: {
+        read: number
+        write: number
+      }
+    }
   }
   options: {
     [key: string]: unknown
@@ -1583,6 +1853,7 @@ export type ProviderModel = {
   }
   limit: {
     context: number
+    input?: number
     output: number
   }
   family?: string
@@ -2245,6 +2516,8 @@ export type VmUpdateData = {
     privateKey?: string
     passphrase?: string
     notes?: string
+    workspaceRoot?: string
+    repoUrl?: string
   }
   path: {
     vmID: string
@@ -2276,6 +2549,72 @@ export type VmUpdateResponses = {
 }
 
 export type VmUpdateResponse = VmUpdateResponses[keyof VmUpdateResponses]
+
+export type RunbookResumeData = {
+  body?: never
+  path: {
+    runID: string
+  }
+  query?: {
+    directory?: string
+  }
+  url: "/runbook/{runID}/resume"
+}
+
+export type RunbookResumeErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type RunbookResumeError = RunbookResumeErrors[keyof RunbookResumeErrors]
+
+export type RunbookResumeResponses = {
+  /**
+   * Runbook session state
+   */
+  200: RunbookSessionState
+}
+
+export type RunbookResumeResponse = RunbookResumeResponses[keyof RunbookResumeResponses]
+
+export type RunbookCancelData = {
+  body?: never
+  path: {
+    runID: string
+  }
+  query?: {
+    directory?: string
+  }
+  url: "/runbook/{runID}/cancel"
+}
+
+export type RunbookCancelErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type RunbookCancelError = RunbookCancelErrors[keyof RunbookCancelErrors]
+
+export type RunbookCancelResponses = {
+  /**
+   * Runbook session state
+   */
+  200: RunbookSessionState
+}
+
+export type RunbookCancelResponse = RunbookCancelResponses[keyof RunbookCancelResponses]
 
 export type PtyListData = {
   body?: never
@@ -3010,6 +3349,78 @@ export type SessionTodoResponses = {
 }
 
 export type SessionTodoResponse = SessionTodoResponses[keyof SessionTodoResponses]
+
+export type SessionRunbookData = {
+  body?: never
+  path: {
+    /**
+     * Session ID
+     */
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+  }
+  url: "/session/{sessionID}/runbook"
+}
+
+export type SessionRunbookErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type SessionRunbookError = SessionRunbookErrors[keyof SessionRunbookErrors]
+
+export type SessionRunbookResponses = {
+  /**
+   * Runbook state
+   */
+  200: RunbookSessionState
+}
+
+export type SessionRunbookResponse = SessionRunbookResponses[keyof SessionRunbookResponses]
+
+export type SessionRunbookExecuteData = {
+  body?: never
+  path: {
+    /**
+     * Session ID
+     */
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+  }
+  url: "/session/{sessionID}/runbook/execute"
+}
+
+export type SessionRunbookExecuteErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type SessionRunbookExecuteError = SessionRunbookExecuteErrors[keyof SessionRunbookExecuteErrors]
+
+export type SessionRunbookExecuteResponses = {
+  /**
+   * Runbook state
+   */
+  200: RunbookSessionState
+}
+
+export type SessionRunbookExecuteResponse = SessionRunbookExecuteResponses[keyof SessionRunbookExecuteResponses]
 
 export type SessionInitData = {
   body?: {

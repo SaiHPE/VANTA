@@ -108,6 +108,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
     const inflight = new Map<string, Promise<void>>()
     const inflightDiff = new Map<string, Promise<void>>()
     const inflightTodo = new Map<string, Promise<void>>()
+    const inflightRunbook = new Map<string, Promise<void>>()
     const inflightVm = new Map<string, Promise<void>>()
     const inflightVmActivity = new Map<string, Promise<void>>()
     const [meta, setMeta] = createStore({
@@ -292,6 +293,38 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
               globalSync.todo.set(sessionID, list)
             }),
           )
+        },
+        async runbook(sessionID: string) {
+          const directory = sdk.directory
+          const client = sdk.client
+          const [store, setStore] = globalSync.child(directory)
+          const existing = store.runbook[sessionID]
+          if (existing?.path) return
+
+          const key = keyFor(directory, sessionID)
+          return runInflight(inflightRunbook, key, () =>
+            retry(() => client.session.runbook({ sessionID })).then((value) => {
+              setStore("runbook", sessionID, value.data)
+            }),
+          )
+        },
+        async runbookExecute(sessionID: string) {
+          const [, setStore] = globalSync.child(sdk.directory)
+          const value = await sdk.client.session.runbookExecute({ sessionID }).then((x) => x.data)
+          if (value) setStore("runbook", sessionID, value)
+          return value
+        },
+        async runbookResume(input: { runID: string; sessionID: string }) {
+          const [, setStore] = globalSync.child(sdk.directory)
+          const value = await sdk.client.runbook.resume({ runID: input.runID }).then((x) => x.data)
+          if (value) setStore("runbook", input.sessionID, value)
+          return value
+        },
+        async runbookCancel(input: { runID: string; sessionID: string }) {
+          const [, setStore] = globalSync.child(sdk.directory)
+          const value = await sdk.client.runbook.cancel({ runID: input.runID }).then((x) => x.data)
+          if (value) setStore("runbook", input.sessionID, value)
+          return value
         },
         history: {
           more(sessionID: string) {

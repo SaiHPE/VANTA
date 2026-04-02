@@ -12,6 +12,7 @@ import { SessionSummary } from "@/session/summary"
 import { Todo } from "../../session/todo"
 import { Agent } from "../../agent/agent"
 import { Snapshot } from "@/snapshot"
+import { Runbook } from "@/runbook"
 import { Log } from "../../util/log"
 import { PermissionNext } from "@/permission/next"
 import { errors } from "../error"
@@ -180,6 +181,67 @@ export const SessionRoutes = lazy(() =>
         const sessionID = c.req.valid("param").sessionID
         const todos = await Todo.get(sessionID)
         return c.json(todos)
+      },
+    )
+    .get(
+      "/:sessionID/runbook",
+      describeRoute({
+        summary: "Get session runbook",
+        description: "Retrieve the runbook file and latest run state for a session.",
+        operationId: "session.runbook",
+        responses: {
+          200: {
+            description: "Runbook state",
+            content: {
+              "application/json": {
+                schema: resolver(Runbook.Schema.SessionState),
+              },
+            },
+          },
+          ...errors(400, 404),
+        },
+      }),
+      validator(
+        "param",
+        z.object({
+          sessionID: z.string().meta({ description: "Session ID" }),
+        }),
+      ),
+      async (c) => {
+        return c.json(await Runbook.state(c.req.valid("param").sessionID))
+      },
+    )
+    .post(
+      "/:sessionID/runbook/execute",
+      describeRoute({
+        summary: "Execute session runbook",
+        description: "Create a run for the current session runbook and execute it deterministically.",
+        operationId: "session.runbookExecute",
+        responses: {
+          200: {
+            description: "Runbook state",
+            content: {
+              "application/json": {
+                schema: resolver(Runbook.Schema.SessionState),
+              },
+            },
+          },
+          ...errors(400, 404),
+        },
+      }),
+      validator(
+        "param",
+        z.object({
+          sessionID: z.string().meta({ description: "Session ID" }),
+        }),
+      ),
+      async (c) => {
+        return c.json(
+          await Runbook.execute({
+            sessionID: c.req.valid("param").sessionID,
+            abort: c.req.raw.signal,
+          }),
+        )
       },
     )
     .post(

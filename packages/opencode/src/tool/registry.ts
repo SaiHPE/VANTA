@@ -26,7 +26,8 @@ import { Flag } from "@/flag/flag"
 import { Log } from "@/util/log"
 import { LspTool } from "./lsp"
 import { Truncate } from "./truncation"
-import { VMDownloadTool, VMExecTool, VMListTool, VMTestTool, VMUploadTool } from "./vm"
+import { RunbookExecTool, RunbookResumeTool, RunbookStatusTool } from "./runbook"
+import { VMDownloadTool, VMExecTool, VMListTool, VMTestTool, VMUploadTool, VMWorkspacePrepareTool } from "./vm"
 
 import { ApplyPatchTool } from "./apply_patch"
 import { Glob } from "../util/glob"
@@ -119,8 +120,12 @@ export namespace ToolRegistry {
       VMListTool,
       VMTestTool,
       VMExecTool,
+      VMWorkspacePrepareTool,
       VMUploadTool,
       VMDownloadTool,
+      RunbookStatusTool,
+      RunbookExecTool,
+      RunbookResumeTool,
       SkillTool,
       ApplyPatchTool,
       ...(Flag.OPENCODE_EXPERIMENTAL_LSP_TOOL ? [LspTool] : []),
@@ -145,8 +150,12 @@ export namespace ToolRegistry {
     const result = await Promise.all(
       tools
         .filter((t) => {
-          // Enable websearch/codesearch for zen users OR via enable flag
-          if (t.id === "codesearch" || t.id === "websearch") {
+          if (t.id === "websearch") {
+            return true
+          }
+
+          // Enable codesearch for zen users OR via enable flag
+          if (t.id === "codesearch") {
             return model.providerID === "opencode" || Flag.OPENCODE_ENABLE_EXA
           }
 

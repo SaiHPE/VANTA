@@ -22,6 +22,8 @@ type Form = {
   privateKey: string
   passphrase: string
   notes: string
+  workspaceRoot: string
+  repoUrl: string
 }
 
 const auth = [
@@ -41,6 +43,8 @@ function blank(): Form {
     privateKey: "",
     passphrase: "",
     notes: "",
+    workspaceRoot: "",
+    repoUrl: "",
   }
 }
 
@@ -56,6 +60,8 @@ function fill(vm: Partial<VmDetail>): Form {
     privateKey: vm.privateKey ?? "",
     passphrase: vm.passphrase ?? "",
     notes: vm.notes ?? "",
+    workspaceRoot: vm.workspaceRoot ?? "",
+    repoUrl: vm.repoUrl ?? "",
   }
 }
 
@@ -78,6 +84,8 @@ function data(form: Form) {
     privateKey: form.authType === "private_key" ? trim(form.privateKey) : undefined,
     passphrase: form.authType === "private_key" ? trim(form.passphrase) : undefined,
     notes: trim(form.notes),
+    workspaceRoot: trim(form.workspaceRoot),
+    repoUrl: trim(form.repoUrl),
   }
 }
 
@@ -491,6 +499,20 @@ export function SettingsVMs() {
             </div>
 
             <div class="grid gap-4 pt-4">
+              <div class="grid gap-4 lg:grid-cols-2">
+                <Input
+                  label="Workspace root"
+                  value={form.workspaceRoot}
+                  onChange={(value) => patch("workspaceRoot", value)}
+                  placeholder="/var/tmp/opencode"
+                />
+                <Input
+                  label="Repo URL"
+                  value={form.repoUrl}
+                  onChange={(value) => patch("repoUrl", value)}
+                  placeholder="git@github.com:org/repo.git"
+                />
+              </div>
               <Show when={form.authType === "password"}>
                 <Input
                   label="Password"
@@ -545,6 +567,8 @@ export function SettingsVMs() {
                 <Item label="Architecture" value={view()?.facts?.arch} />
                 <Item label="Shell" value={view()?.facts?.shell} />
                 <Item label="Home" value={view()?.facts?.homeDir} />
+                <Item label="Workspace root" value={view()?.workspaceRoot} />
+                <Item label="Repo URL" value={view()?.repoUrl} />
               </div>
             </div>
 

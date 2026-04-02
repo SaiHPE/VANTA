@@ -176,6 +176,7 @@ export function createChildStoreManager(input: {
             lsp: [],
             vm: [],
             vm_activity: {},
+            runbook: {},
             vcs: vcsStore.value,
             limit: 5,
             message: {},
