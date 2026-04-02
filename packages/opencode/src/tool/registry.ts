@@ -27,7 +27,23 @@ import { Log } from "@/util/log"
 import { LspTool } from "./lsp"
 import { Truncate } from "./truncation"
 import { RunbookExecTool, RunbookResumeTool, RunbookStatusTool } from "./runbook"
-import { VMDownloadTool, VMExecTool, VMListTool, VMTestTool, VMUploadTool, VMWorkspacePrepareTool } from "./vm"
+import {
+  VMDownloadTool,
+  VMExecTool,
+  VMGlobTool,
+  VMGrepTool,
+  VMJobCancelTool,
+  VMJobLogsTool,
+  VMJobStartTool,
+  VMJobWaitTool,
+  VMListTool,
+  VMReadTool,
+  VMSessionTool,
+  VMSyncTool,
+  VMTestTool,
+  VMUploadTool,
+  VMWorkspacePrepareTool,
+} from "./vm"
 
 import { ApplyPatchTool } from "./apply_patch"
 import { Glob } from "../util/glob"
@@ -120,6 +136,15 @@ export namespace ToolRegistry {
       VMListTool,
       VMTestTool,
       VMExecTool,
+      VMSessionTool,
+      VMSyncTool,
+      VMJobStartTool,
+      VMJobLogsTool,
+      VMJobWaitTool,
+      VMJobCancelTool,
+      VMReadTool,
+      VMGrepTool,
+      VMGlobTool,
       VMWorkspacePrepareTool,
       VMUploadTool,
       VMDownloadTool,

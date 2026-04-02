@@ -7,7 +7,7 @@ import { Filesystem } from "@/util/filesystem"
 import { Database, desc, eq } from "@/storage/db"
 import { RunbookRunTable, RunbookStepTable } from "./runbook.sql"
 import * as RunbookSchema from "./schema"
-import { VM } from "@/vm"
+import { VM, VMRemote } from "@/vm"
 import { VMSSH } from "@/vm/ssh"
 import { VMOperate } from "@/vm/operate"
 import { VMWorkspace } from "@/vm/workspace"
@@ -21,10 +21,6 @@ export namespace Runbook {
   type RunRow = typeof RunbookRunTable.$inferSelect
   type StepRow = typeof RunbookStepTable.$inferSelect
   type Step = z.infer<typeof Schema.Step>
-  type WriteStep =
-    | Extract<Step, { kind: "upload" }>
-    | Extract<Step, { kind: "exec"; intent: "write" }>
-    | Extract<Step, { kind: "workspace_prepare" }>
 
   export const Event = {
     RunUpdated: BusEvent.define(
@@ -53,6 +49,7 @@ export namespace Runbook {
       stepIdx: row.step_idx,
       bindings: row.bindings ?? {},
       facts: row.facts ?? {},
+      handles: row.handles ?? {},
       approval: row.approval ?? {},
       sourceBundle: row.source_bundle ?? [],
       pauseReason: row.pause_reason ?? undefined,
@@ -153,11 +150,9 @@ export namespace Runbook {
     )
   }
 
-  function isWrite(step: Step): step is WriteStep {
-    if (step.kind === "exec") return step.intent === "write"
-    if (step.kind === "upload") return true
-    if (step.kind === "workspace_prepare") return true
-    return false
+  function isWrite(step: Step) {
+    if (!("targets" in step)) return false
+    return step.targets.type === "roles"
   }
 
   function verifyOutput(input: {
@@ -209,6 +204,7 @@ export namespace Runbook {
     stepIdx?: number
     bindings?: Record<string, string[]>
     facts?: Record<string, string>
+    handles?: z.infer<typeof Schema.Run>["handles"]
     approval?: { confirmed?: boolean; roles?: Record<string, string[]> }
     pauseReason?: z.infer<typeof Schema.PauseReason> | null
     error?: string | null
@@ -223,6 +219,7 @@ export namespace Runbook {
           ...(input.stepIdx !== undefined ? { step_idx: input.stepIdx } : {}),
           ...(input.bindings ? { bindings: input.bindings } : {}),
           ...(input.facts ? { facts: input.facts } : {}),
+          ...(input.handles ? { handles: input.handles } : {}),
           ...(input.approval ? { approval: input.approval } : {}),
           ...(input.pauseReason !== undefined ? { pause_reason: input.pauseReason ?? null } : {}),
           ...(input.error !== undefined ? { error: input.error ?? null } : {}),
@@ -288,6 +285,7 @@ export namespace Runbook {
       ...new Set(
         input.plan.steps.flatMap((step) => {
           if (!isWrite(step)) return []
+          if (!("targets" in step)) return []
           if (step.targets.type !== "roles") return []
           return step.targets.roles
         }),
@@ -426,6 +424,34 @@ export namespace Runbook {
     return Promise.all(ids.map((id) => VM.get(id)))
   }
 
+  function sessions(input: {
+    run: z.infer<typeof Schema.Run>
+    vms: VM.Detail[]
+  }) {
+    return input.vms.map((vm) => {
+      const id = input.run.handles.vm_sessions[vm.id]
+      if (!id) throw new Error(`No VM session handle recorded for ${vm.name}`)
+      return {
+        vm,
+        id,
+      }
+    })
+  }
+
+  function jobs(input: {
+    run: z.infer<typeof Schema.Run>
+    vms: VM.Detail[]
+  }) {
+    return input.vms.map((vm) => {
+      const id = input.run.handles.vm_jobs[vm.id]
+      if (!id) throw new Error(`No VM job handle recorded for ${vm.name}`)
+      return {
+        vm,
+        id,
+      }
+    })
+  }
+
   async function applyCapture(input: {
     step: Extract<z.infer<typeof Schema.Step>, { kind: "exec" }>
     facts: Record<string, string>
@@ -459,11 +485,22 @@ export namespace Runbook {
     return [...new Set(values.filter(Boolean))]
   }
 
+  async function cleanup(run: z.infer<typeof Schema.Run>) {
+    await Promise.all(
+      Object.values(run.handles.vm_sessions).map((id) =>
+        VMRemote.sessionClose({
+          vmSessionID: id,
+        }).catch(() => undefined),
+      ),
+    )
+  }
+
   async function stop(input: {
     runID: string
     row: z.infer<typeof Schema.StepRecord>
     message: string
     facts?: Record<string, string>
+    handles?: z.infer<typeof Schema.Run>["handles"]
     result?: VMOperate.Result<unknown>
     status?: "paused" | "failed"
     reason?: z.infer<typeof Schema.PauseReason>
@@ -478,15 +515,18 @@ export namespace Runbook {
       error: input.message,
       ended: Date.now(),
     })
-    return updateRun({
+    const run = await updateRun({
       runID: input.runID,
       status: input.status ?? "paused",
       pauseReason: input.reason ?? "error",
       error: input.message,
       facts: input.facts,
+      handles: input.handles,
       stepIdx: input.row.stepIdx,
       ended: input.status === "failed" ? Date.now() : undefined,
     })
+    if (input.status === "failed") await cleanup(run)
+    return run
   }
 
   async function runStep(input: {
@@ -714,7 +754,8 @@ export namespace Runbook {
       const repo = step.repo_url ? render(step.repo_url, input.run.facts) : undefined
       const ref = step.ref ? render(step.ref, input.run.facts) : undefined
       const base = step.base_dir ? render(step.base_dir, input.run.facts) : undefined
-      const missing = [...(repo?.missing ?? []), ...(ref?.missing ?? []), ...(base?.missing ?? [])]
+      const cacheRoot = step.cache_root ? render(step.cache_root, input.run.facts) : undefined
+      const missing = [...(repo?.missing ?? []), ...(ref?.missing ?? []), ...(base?.missing ?? []), ...(cacheRoot?.missing ?? [])]
       if (missing.length > 0) {
         return stop({
           runID: input.run.id,
@@ -755,6 +796,9 @@ export namespace Runbook {
               vm,
             }),
             ref: ref?.value ?? local.ref ?? "",
+            sparsePaths: step.sparse_paths,
+            cacheRoot: cacheRoot?.value,
+            cacheDirs: step.cache_dirs,
           })
           push(`${value.workspaceDir}\n${value.workspaceRef}`)
           return value
@@ -829,6 +873,540 @@ export namespace Runbook {
       return updateRun({
         runID: input.run.id,
         facts,
+        stepIdx: input.row.stepIdx + 1,
+        status: "running",
+        pauseReason: null,
+        error: null,
+      })
+    }
+
+    if (step.kind === "session_start") {
+      const repo = step.repo_url ? render(step.repo_url, input.run.facts) : undefined
+      const ref = step.ref ? render(step.ref, input.run.facts) : undefined
+      const base = step.base_dir ? render(step.base_dir, input.run.facts) : undefined
+      const cacheRoot = step.cache_root ? render(step.cache_root, input.run.facts) : undefined
+      const missing = [...(repo?.missing ?? []), ...(ref?.missing ?? []), ...(base?.missing ?? []), ...(cacheRoot?.missing ?? [])]
+      if (missing.length > 0) {
+        return stop({
+          runID: input.run.id,
+          row: input.row,
+          message: `Missing template values for "${step.title}": ${missing.join(", ")}`,
+          reason: "missing_fact",
+        })
+      }
+
+      const local = await VMWorkspace.local({
+        repoUrl: !repo?.value && vms.some((vm) => !vm.repoUrl),
+        ref: !ref?.value,
+      })
+
+      const result = await VMOperate.run({
+        ctx: input.ctx,
+        tool: "runbook_session_start",
+        vms,
+        title: `Runbook: ${step.title}`,
+        mode: step.mode,
+        concurrency: step.concurrency,
+        async work(vm, push) {
+          const value = await VMRemote.sessionOpen({
+            sessionID: input.run.sessionID,
+            vmID: vm.id,
+            baseDir: VMWorkspace.root({
+              baseDir: base?.value,
+              vm,
+            }),
+            repoUrl: VMWorkspace.repo({
+              repoUrl: repo?.value,
+              fallback: local.repoUrl,
+              vm,
+            }),
+            ref: ref?.value ?? local.ref ?? "",
+            sparsePaths: step.sparse_paths,
+            cacheRoot: cacheRoot?.value ?? vm.cacheRoot,
+            cacheDirs: step.cache_dirs,
+            abort: input.ctx.abort,
+          })
+          push(`${value.workspaceDir}\n${value.workspaceRef}`)
+          return value
+        },
+        done(_vm, value) {
+          return {
+            summary: `opened ${value.workspaceDir}`,
+            output: [
+              `vm_session_id=${value.id}`,
+              `workspace_dir=${value.workspaceDir}`,
+              `workspace_ref=${value.workspaceRef}`,
+              `workspace_repo=${value.workspaceRepo}`,
+            ].join("\n"),
+            ran: true,
+          }
+        },
+        async fail(vm, err) {
+          const text = err instanceof Error ? err.stack ?? err.message : String(err)
+          const info = await VMOperate.capture(text)
+          return {
+            summary: err instanceof Error ? err.message : String(err),
+            output: info.output,
+            transcriptPath: info.transcriptPath,
+            artifacts: VMOperate.inline(vm, "session-start-error", text),
+            ran: false,
+          }
+        },
+      })
+
+      const err = fault(result)
+      if (err) {
+        return stop({
+          runID: input.run.id,
+          row: input.row,
+          message: err.summary,
+          result,
+          status: "failed",
+          reason: "error",
+        })
+      }
+
+      const dirs = unique(result.results.flatMap((item) => (item.value ? [item.value.workspaceDir] : [])))
+      const refs = unique(result.results.flatMap((item) => (item.value ? [item.value.workspaceRef] : [])))
+      const repos = unique(result.results.flatMap((item) => (item.value ? [item.value.workspaceRepo] : [])))
+      const facts = {
+        ...input.run.facts,
+        ...(dirs.length === 1 ? { workspace_dir: dirs[0]! } : {}),
+        ...(refs.length === 1 ? { workspace_ref: refs[0]! } : {}),
+        ...(repos.length === 1 ? { workspace_repo: repos[0]! } : {}),
+      }
+      const handles = {
+        ...input.run.handles,
+        vm_sessions: Object.fromEntries(result.results.flatMap((item) => (item.value ? [[item.vm.id, item.value.id]] : []))),
+        vm_jobs: {},
+        syncs: {},
+      }
+
+      await updateStep({
+        id: input.row.id,
+        status: "completed",
+        summary: result.output || "Step completed",
+        outputPreview: result.output,
+        vmActivityIDs: result.metadata.activity_ids,
+        artifacts: result.metadata.artifacts ?? [],
+        ended: Date.now(),
+      })
+      return updateRun({
+        runID: input.run.id,
+        facts,
+        handles,
+        stepIdx: input.row.stepIdx + 1,
+        status: "running",
+        pauseReason: null,
+        error: null,
+      })
+    }
+
+    if (step.kind === "sync") {
+      const bound = sessions({
+        run: input.run,
+        vms,
+      })
+      const result = await VMOperate.run({
+        ctx: input.ctx,
+        tool: "runbook_sync",
+        vms,
+        title: `Runbook: ${step.title}`,
+        mode: step.mode,
+        concurrency: step.concurrency,
+        work(vm, push) {
+          const match = bound.find((item) => item.vm.id === vm.id)
+          if (!match) throw new Error(`No VM session handle recorded for ${vm.name}`)
+          return VMRemote.sync({
+            vmSessionID: match.id,
+            includeUntracked: step.include_untracked,
+          }).then((value) => {
+            push(`uploaded=${value.uploaded} deleted=${value.deleted}`)
+            return value
+          })
+        },
+        done(_vm, value) {
+          return {
+            summary: `uploaded=${value.uploaded} deleted=${value.deleted}`,
+            output: [
+              `hash=${value.hash}`,
+              `uploaded=${value.uploaded}`,
+              `deleted=${value.deleted}`,
+              `skipped=${value.skipped}`,
+            ].join("\n"),
+            ran: true,
+          }
+        },
+        async fail(vm, err) {
+          const text = err instanceof Error ? err.stack ?? err.message : String(err)
+          const info = await VMOperate.capture(text)
+          return {
+            summary: err instanceof Error ? err.message : String(err),
+            output: info.output,
+            transcriptPath: info.transcriptPath,
+            artifacts: VMOperate.inline(vm, "sync-error", text),
+            ran: false,
+          }
+        },
+      })
+
+      const err = fault(result)
+      if (err) {
+        return stop({
+          runID: input.run.id,
+          row: input.row,
+          message: err.summary,
+          result,
+          status: "failed",
+          reason: "error",
+          handles: input.run.handles,
+        })
+      }
+
+      const handles = {
+        ...input.run.handles,
+        syncs: {
+          ...input.run.handles.syncs,
+          ...Object.fromEntries(result.results.flatMap((item) => (item.value ? [[item.vm.id, item.value]] : []))),
+        },
+      }
+
+      await updateStep({
+        id: input.row.id,
+        status: "completed",
+        summary: result.output || "Step completed",
+        outputPreview: result.output,
+        vmActivityIDs: result.metadata.activity_ids,
+        artifacts: result.metadata.artifacts ?? [],
+        ended: Date.now(),
+      })
+      return updateRun({
+        runID: input.run.id,
+        handles,
+        stepIdx: input.row.stepIdx + 1,
+        status: "running",
+        pauseReason: null,
+        error: null,
+      })
+    }
+
+    if (step.kind === "job_start") {
+      const command = render(step.command, input.run.facts)
+      const cwd = step.cwd ? render(step.cwd, input.run.facts) : undefined
+      const missing = [...command.missing, ...(cwd?.missing ?? [])]
+      if (missing.length > 0) {
+        return stop({
+          runID: input.run.id,
+          row: input.row,
+          message: `Missing template values for "${step.title}": ${missing.join(", ")}`,
+          reason: "missing_fact",
+        })
+      }
+
+      const bound = sessions({
+        run: input.run,
+        vms,
+      })
+      const result = await VMOperate.run({
+        ctx: input.ctx,
+        tool: "runbook_job_start",
+        vms,
+        title: `Runbook: ${step.title}`,
+        mode: step.mode,
+        concurrency: step.concurrency,
+        work(vm, push) {
+          const match = bound.find((item) => item.vm.id === vm.id)
+          if (!match) throw new Error(`No VM session handle recorded for ${vm.name}`)
+          return VMRemote.jobStart({
+            vmSessionID: match.id,
+            command: command.value,
+            cwd: cwd?.value,
+          }).then((value) => {
+            push(value.id)
+            return value
+          })
+        },
+        done(_vm, value) {
+          return {
+            summary: `${value.id} ${value.status}`,
+            output: [
+              `vm_job_id=${value.id}`,
+              `status=${value.status}`,
+              value.cwd ? `cwd=${value.cwd}` : "",
+            ]
+              .filter(Boolean)
+              .join("\n"),
+            ran: true,
+          }
+        },
+        async fail(vm, err) {
+          const text = err instanceof Error ? err.stack ?? err.message : String(err)
+          const info = await VMOperate.capture(text)
+          return {
+            summary: err instanceof Error ? err.message : String(err),
+            output: info.output,
+            transcriptPath: info.transcriptPath,
+            artifacts: VMOperate.inline(vm, "job-start-error", text),
+            ran: false,
+          }
+        },
+      })
+
+      const err = fault(result)
+      if (err) {
+        return stop({
+          runID: input.run.id,
+          row: input.row,
+          message: err.summary,
+          result,
+          status: "failed",
+          reason: "error",
+          handles: input.run.handles,
+        })
+      }
+
+      const handles = {
+        ...input.run.handles,
+        vm_jobs: Object.fromEntries(result.results.flatMap((item) => (item.value ? [[item.vm.id, item.value.id]] : []))),
+      }
+
+      await updateStep({
+        id: input.row.id,
+        status: "completed",
+        summary: result.output || "Step completed",
+        outputPreview: result.output,
+        vmActivityIDs: result.metadata.activity_ids,
+        artifacts: result.metadata.artifacts ?? [],
+        ended: Date.now(),
+      })
+      return updateRun({
+        runID: input.run.id,
+        handles,
+        stepIdx: input.row.stepIdx + 1,
+        status: "running",
+        pauseReason: null,
+        error: null,
+      })
+    }
+
+    if (step.kind === "job_wait") {
+      const bound = jobs({
+        run: input.run,
+        vms,
+      })
+      const result = await VMOperate.run({
+        ctx: input.ctx,
+        tool: "runbook_job_wait",
+        vms,
+        title: `Runbook: ${step.title}`,
+        mode: step.mode,
+        concurrency: step.concurrency,
+        work(vm) {
+          const match = bound.find((item) => item.vm.id === vm.id)
+          if (!match) throw new Error(`No VM job handle recorded for ${vm.name}`)
+          return VMRemote.jobWait({
+            vmJobID: match.id,
+            timeoutMs: step.timeout_ms,
+          })
+        },
+        done(_vm, value) {
+          return {
+            summary: ["status" in value ? value.status : "unknown", "exitCode" in value && typeof value.exitCode === "number" ? `exit=${value.exitCode}` : ""].filter(Boolean).join(" "),
+            output: [
+              `vm_job_id=${value.id}`,
+              `status=${value.status}`,
+              typeof value.exitCode === "number" ? `exit=${value.exitCode}` : "",
+              "timedOut" in value && value.timedOut ? "timed_out=true" : "",
+            ]
+              .filter(Boolean)
+              .join("\n"),
+            ran: true,
+          }
+        },
+        async fail(vm, err) {
+          const text = err instanceof Error ? err.stack ?? err.message : String(err)
+          const info = await VMOperate.capture(text)
+          return {
+            summary: err instanceof Error ? err.message : String(err),
+            output: info.output,
+            transcriptPath: info.transcriptPath,
+            artifacts: VMOperate.inline(vm, "job-wait-error", text),
+            ran: false,
+          }
+        },
+      })
+
+      const err = fault(result)
+      if (err) {
+        return stop({
+          runID: input.run.id,
+          row: input.row,
+          message: err.summary,
+          result,
+          status: "failed",
+          reason: "error",
+          handles: input.run.handles,
+        })
+      }
+
+      await updateStep({
+        id: input.row.id,
+        status: "completed",
+        summary: result.output || "Step completed",
+        outputPreview: result.output,
+        vmActivityIDs: result.metadata.activity_ids,
+        artifacts: result.metadata.artifacts ?? [],
+        ended: Date.now(),
+      })
+      return updateRun({
+        runID: input.run.id,
+        handles: input.run.handles,
+        stepIdx: input.row.stepIdx + 1,
+        status: "running",
+        pauseReason: null,
+        error: null,
+      })
+    }
+
+    if (step.kind === "job_logs") {
+      const bound = jobs({
+        run: input.run,
+        vms,
+      })
+      const result = await VMOperate.run({
+        ctx: input.ctx,
+        tool: "runbook_job_logs",
+        vms,
+        title: `Runbook: ${step.title}`,
+        mode: step.mode,
+        concurrency: step.concurrency,
+        work(vm) {
+          const match = bound.find((item) => item.vm.id === vm.id)
+          if (!match) throw new Error(`No VM job handle recorded for ${vm.name}`)
+          return VMRemote.jobLogs({
+            vmJobID: match.id,
+            tail: step.tail,
+            follow: false,
+          })
+        },
+        async done(_vm, value) {
+          const info = await VMOperate.capture(value.log)
+          return {
+            summary: `${value.id} ${value.status}`,
+            output: info.output,
+            transcriptPath: info.transcriptPath,
+            ran: true,
+          }
+        },
+        async fail(vm, err) {
+          const text = err instanceof Error ? err.stack ?? err.message : String(err)
+          const info = await VMOperate.capture(text)
+          return {
+            summary: err instanceof Error ? err.message : String(err),
+            output: info.output,
+            transcriptPath: info.transcriptPath,
+            artifacts: VMOperate.inline(vm, "job-logs-error", text),
+            ran: false,
+          }
+        },
+      })
+
+      const err = fault(result)
+      if (err) {
+        return stop({
+          runID: input.run.id,
+          row: input.row,
+          message: err.summary,
+          result,
+          status: "failed",
+          reason: "error",
+          handles: input.run.handles,
+        })
+      }
+
+      await updateStep({
+        id: input.row.id,
+        status: "completed",
+        summary: result.output || "Step completed",
+        outputPreview: result.output,
+        vmActivityIDs: result.metadata.activity_ids,
+        artifacts: result.metadata.artifacts ?? [],
+        ended: Date.now(),
+      })
+      return updateRun({
+        runID: input.run.id,
+        handles: input.run.handles,
+        stepIdx: input.row.stepIdx + 1,
+        status: "running",
+        pauseReason: null,
+        error: null,
+      })
+    }
+
+    if (step.kind === "job_cancel") {
+      const bound = jobs({
+        run: input.run,
+        vms,
+      })
+      const result = await VMOperate.run({
+        ctx: input.ctx,
+        tool: "runbook_job_cancel",
+        vms,
+        title: `Runbook: ${step.title}`,
+        mode: step.mode,
+        concurrency: step.concurrency,
+        work(vm) {
+          const match = bound.find((item) => item.vm.id === vm.id)
+          if (!match) throw new Error(`No VM job handle recorded for ${vm.name}`)
+          return VMRemote.jobCancel({
+            vmJobID: match.id,
+          })
+        },
+        done(_vm, value) {
+          return {
+            summary: `${value.id} ${value.status}`,
+            output: `vm_job_id=${value.id}\nstatus=${value.status}`,
+            ran: true,
+          }
+        },
+        async fail(vm, err) {
+          const text = err instanceof Error ? err.stack ?? err.message : String(err)
+          const info = await VMOperate.capture(text)
+          return {
+            summary: err instanceof Error ? err.message : String(err),
+            output: info.output,
+            transcriptPath: info.transcriptPath,
+            artifacts: VMOperate.inline(vm, "job-cancel-error", text),
+            ran: false,
+          }
+        },
+      })
+
+      const err = fault(result)
+      if (err) {
+        return stop({
+          runID: input.run.id,
+          row: input.row,
+          message: err.summary,
+          result,
+          status: "failed",
+          reason: "error",
+          handles: input.run.handles,
+        })
+      }
+
+      await updateStep({
+        id: input.row.id,
+        status: "completed",
+        summary: result.output || "Step completed",
+        outputPreview: result.output,
+        vmActivityIDs: result.metadata.activity_ids,
+        artifacts: result.metadata.artifacts ?? [],
+        ended: Date.now(),
+      })
+      return updateRun({
+        runID: input.run.id,
+        handles: input.run.handles,
         stepIdx: input.row.stepIdx + 1,
         status: "running",
         pauseReason: null,
@@ -1034,16 +1612,21 @@ export namespace Runbook {
     let run = input.run
     for (;;) {
       if (input.ctx.abort.aborted) throw new Error("Runbook execution aborted")
-      if (run.status === "cancelled" || run.status === "completed") return run
+      if (run.status === "cancelled" || run.status === "completed") {
+        await cleanup(run)
+        return run
+      }
       const step = listStepRows(run.id).map(fromStepRow)[run.stepIdx]
       if (!step) {
-        return updateRun({
+        const done = await updateRun({
           runID: run.id,
           status: "completed",
           pauseReason: null,
           error: null,
           ended: Date.now(),
         })
+        await cleanup(done)
+        return done
       }
       run = await runStep({
         ctx: input.ctx,
@@ -1077,6 +1660,7 @@ export namespace Runbook {
           step_idx: 0,
           bindings: {},
           facts,
+          handles: {},
           approval: {},
           source_bundle: input.plan.sources,
           pause_reason: null,

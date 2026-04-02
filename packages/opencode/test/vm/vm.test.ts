@@ -1,12 +1,126 @@
+import { $ } from "bun"
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test"
+import fs from "fs/promises"
+import { PassThrough } from "stream"
 import { Instance } from "../../src/project/instance"
 import { Question } from "../../src/question"
 import { Session } from "../../src/session"
-import { VM } from "../../src/vm"
+import { VM, VMRemote } from "../../src/vm"
 import { VMOperate } from "../../src/vm/operate"
 import { VMSSH } from "../../src/vm/ssh"
 import { resetDatabase } from "../fixture/db"
 import { tmpdir } from "../fixture/fixture"
+
+async function git(dir: string) {
+  await $`git init`.cwd(dir).quiet()
+  await $`git config user.email test@example.com`.cwd(dir).quiet()
+  await $`git config user.name opencode-test`.cwd(dir).quiet()
+  await $`git config core.fsmonitor false`.cwd(dir).quiet()
+  await $`git commit --allow-empty -m root`.cwd(dir).quiet()
+  await $`git branch -M dev`.cwd(dir).quiet().nothrow()
+  await $`git remote add origin git@example.com:demo/repo.git`.cwd(dir).quiet().nothrow()
+}
+
+class FakeChannel extends PassThrough {
+  readonly calls = [] as Array<{ type: string; method?: string; args?: Record<string, unknown> }>
+  readonly jobs = new Map<string, { id: string; status: string; command: string; cwd?: string; exit_code?: number; log: string; log_dir: string }>()
+
+  constructor() {
+    super()
+    queueMicrotask(() => {
+      this.push(JSON.stringify({ type: "hello", version: "test", pid: 1 }) + "\n")
+      this.push(JSON.stringify({ type: "capabilities", capabilities: [] }) + "\n")
+    })
+  }
+
+  override write(chunk: any) {
+    const text = Buffer.isBuffer(chunk) ? chunk.toString("utf-8") : String(chunk)
+    text
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .forEach((line) => {
+        const msg = JSON.parse(line)
+        this.calls.push(msg)
+        if (msg.type === "heartbeat") {
+          this.push(JSON.stringify({ type: "heartbeat", time: Date.now() }) + "\n")
+          return
+        }
+        if (msg.type === "shutdown") {
+          this.push(JSON.stringify({ type: "shutdown", ok: true }) + "\n")
+          queueMicrotask(() => this.emit("close"))
+          return
+        }
+        if (msg.type !== "call") return
+        if (msg.method === "write" || msg.method === "delete") {
+          this.push(JSON.stringify({ type: "result", id: msg.id, result: { ok: true } }) + "\n")
+          return
+        }
+        if (msg.method === "job.start") {
+          const job = {
+            id: String(msg.args?.id),
+            status: "running",
+            command: String(msg.args?.command ?? ""),
+            cwd: typeof msg.args?.cwd === "string" ? msg.args.cwd : undefined,
+            exit_code: undefined,
+            log: "job-output\n",
+            log_dir: `/tmp/jobs/${String(msg.args?.id)}`,
+          }
+          this.jobs.set(job.id, job)
+          this.push(
+            JSON.stringify({
+              type: "result",
+              id: msg.id,
+              result: {
+                id: job.id,
+                status: job.status,
+                command: job.command,
+                cwd: job.cwd,
+                pid: 1234,
+                started_at: Date.now(),
+                log_dir: job.log_dir,
+              },
+            }) + "\n",
+          )
+          return
+        }
+        if (msg.method === "job.logs") {
+          const job = this.jobs.get(String(msg.args?.id))!
+          this.push(JSON.stringify({ type: "result", id: msg.id, result: { id: job.id, status: job.status, log: job.log } }) + "\n")
+          return
+        }
+        if (msg.method === "job.wait") {
+          const job = this.jobs.get(String(msg.args?.id))!
+          job.status = "completed"
+          job.exit_code = 0
+          this.push(
+            JSON.stringify({
+              type: "result",
+              id: msg.id,
+              result: {
+                id: job.id,
+                status: job.status,
+                command: job.command,
+                cwd: job.cwd,
+                pid: 1234,
+                started_at: Date.now() - 100,
+                ended_at: Date.now(),
+                exit_code: job.exit_code,
+                log_dir: job.log_dir,
+              },
+            }) + "\n",
+          )
+          return
+        }
+        if (msg.method === "job.cancel") {
+          const job = this.jobs.get(String(msg.args?.id))!
+          job.status = "cancelled"
+          this.push(JSON.stringify({ type: "result", id: msg.id, result: { id: job.id, status: job.status } }) + "\n")
+          return
+        }
+      })
+    return true
+  }
+}
 
 afterEach(async () => {
   await resetDatabase()
@@ -337,6 +451,168 @@ test("vm operate persists large transcripts to disk and stores transcriptPath on
       expect(items[0]?.transcriptPath).toBeDefined()
       expect(items[0]?.transcript).toContain("truncated")
       expect(await Bun.file(items[0]!.transcriptPath!).text()).toBe(body)
+    },
+  })
+})
+
+test("vm remote session open reuses transport and close updates persisted status", async () => {
+  await using tmp = await tmpdir()
+  await git(tmp.path)
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const vm = await VM.Create({
+        name: "remote",
+        hostname: "remote.local",
+        username: "root",
+        authType: "password",
+        password: "secret",
+        workspaceRoot: "/srv/opencode",
+      })
+      const session = await Session.create({})
+      const stream = new FakeChannel()
+      const connect = spyOn(VM, "connect").mockResolvedValue({
+        client: {} as any,
+        host: "remote.local",
+        time: Date.now(),
+      })
+      const shell = spyOn(VM, "shell").mockResolvedValue("sh")
+      const sftp = spyOn(VM, "sftp").mockResolvedValue({} as any)
+      const workspace = spyOn(VMSSH, "workspace").mockResolvedValue({
+        workspaceDir: "/srv/opencode/project/wt/dev",
+        workspaceRef: "abc123",
+        workspaceRepo: "/srv/opencode/project/mirror/repo.git",
+        repoUrl: "git@example.com:demo/repo.git",
+      })
+      const runtime = spyOn(VMSSH, "runtime").mockResolvedValue("node")
+      const upload = spyOn(VMSSH, "upload").mockResolvedValue(undefined)
+      const start = spyOn(VMSSH, "start").mockResolvedValue(stream as any)
+
+      try {
+        const one = await VMRemote.sessionOpen({
+          sessionID: session.id,
+          vmID: vm.id,
+        })
+        const two = await VMRemote.sessionOpen({
+          sessionID: session.id,
+          vmID: vm.id,
+        })
+
+        expect(one.id).toBe(two.id)
+        expect(start).toHaveBeenCalledTimes(1)
+        expect((await VMRemote.session({ vmSessionID: one.id })).status).toBe("open")
+
+        await VMRemote.sessionClose({
+          vmSessionID: one.id,
+        })
+
+        expect((await VMRemote.session({ vmSessionID: one.id })).status).toBe("closed")
+      } finally {
+        connect.mockRestore()
+        shell.mockRestore()
+        sftp.mockRestore()
+        workspace.mockRestore()
+        runtime.mockRestore()
+        upload.mockRestore()
+        start.mockRestore()
+      }
+    },
+  })
+})
+
+test("vm remote sync and jobs use worker RPCs and persist state", async () => {
+  await using tmp = await tmpdir({
+    init: async (dir) => {
+      await Bun.write(`${dir}/tracked.txt`, "one\n")
+      await Bun.write(`${dir}/gone.txt`, "delete me\n")
+    },
+  })
+  await git(tmp.path)
+  await $`git add .`.cwd(tmp.path).quiet()
+  await $`git commit -m base`.cwd(tmp.path).quiet()
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const head = (await $`git rev-parse HEAD`.cwd(tmp.path).quiet().text()).trim()
+      const vm = await VM.Create({
+        name: "remote",
+        hostname: "remote.local",
+        username: "root",
+        authType: "password",
+        password: "secret",
+        workspaceRoot: "/srv/opencode",
+      })
+      const session = await Session.create({})
+      const stream = new FakeChannel()
+      const connect = spyOn(VM, "connect").mockResolvedValue({
+        client: {} as any,
+        host: "remote.local",
+        time: Date.now(),
+      })
+      const shell = spyOn(VM, "shell").mockResolvedValue("sh")
+      const sftp = spyOn(VM, "sftp").mockResolvedValue({} as any)
+      const workspace = spyOn(VMSSH, "workspace").mockResolvedValue({
+        workspaceDir: "/srv/opencode/project/wt/dev",
+        workspaceRef: head,
+        workspaceRepo: "/srv/opencode/project/mirror/repo.git",
+        repoUrl: "git@example.com:demo/repo.git",
+      })
+      const runtime = spyOn(VMSSH, "runtime").mockResolvedValue("node")
+      const upload = spyOn(VMSSH, "upload").mockResolvedValue(undefined)
+      const start = spyOn(VMSSH, "start").mockResolvedValue(stream as any)
+
+      try {
+        const remote = await VMRemote.sessionOpen({
+          sessionID: session.id,
+          vmID: vm.id,
+        })
+        await Bun.write(`${tmp.path}/tracked.txt`, "two\n")
+        await fs.rm(`${tmp.path}/gone.txt`)
+        await Bun.write(`${tmp.path}/fresh.txt`, "new\n")
+
+        const sync = await VMRemote.sync({
+          vmSessionID: remote.id,
+          includeUntracked: true,
+        })
+        expect(sync.uploaded).toBe(2)
+        expect(sync.deleted).toBe(1)
+        expect(sync.hash).toBeTruthy()
+
+        const job = await VMRemote.jobStart({
+          vmSessionID: remote.id,
+          command: "echo hi",
+        })
+        expect(job.status).toBe("running")
+        const logs = await VMRemote.jobLogs({
+          vmJobID: job.id,
+          follow: false,
+        })
+        expect(logs.log).toContain("job-output")
+        const done = await VMRemote.jobWait({
+          vmJobID: job.id,
+        })
+        expect(done.status).toBe("completed")
+        const stopped = await VMRemote.jobCancel({
+          vmJobID: job.id,
+        })
+        expect(stopped.status).toBe("cancelled")
+
+        const methods = stream.calls.flatMap((item) => (item.method ? [item.method] : []))
+        expect(methods).toContain("write")
+        expect(methods).toContain("delete")
+        expect(methods).toContain("job.start")
+        expect(methods).toContain("job.logs")
+        expect(methods).toContain("job.wait")
+        expect(methods).toContain("job.cancel")
+      } finally {
+        connect.mockRestore()
+        shell.mockRestore()
+        sftp.mockRestore()
+        workspace.mockRestore()
+        runtime.mockRestore()
+        upload.mockRestore()
+        start.mockRestore()
+      }
     },
   })
 })

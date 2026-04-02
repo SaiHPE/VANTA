@@ -739,6 +739,11 @@ export type VmSummary = {
   notes?: string
   workspaceRoot?: string
   repoUrl?: string
+  cacheRoot?: string
+  maxConcurrency?: number
+  weight?: number
+  retryCount?: number
+  retryBackoffSecs?: number
   facts?: VmFacts
   lastStatus: VmStatus
   lastSeenAt?: number
@@ -828,6 +833,26 @@ export type RunbookRun = {
   facts?: {
     [key: string]: string
   }
+  handles?: {
+    vm_sessions?: {
+      [key: string]: string
+    }
+    vm_jobs?: {
+      [key: string]: string
+    }
+    syncs?: {
+      [key: string]: {
+        vmSessionID: string
+        vmID: string
+        hash: string
+        uploaded: number
+        deleted: number
+        skipped: number
+        files: Array<string>
+        time: number
+      }
+    }
+  }
   approval?: {
     confirmed?: boolean
     roles?: {
@@ -861,7 +886,18 @@ export type RunbookStepRecord = {
   sessionID: string
   stepID: string
   stepIdx: number
-  kind: "question" | "exec" | "upload" | "download" | "workspace_prepare"
+  kind:
+    | "question"
+    | "exec"
+    | "upload"
+    | "download"
+    | "workspace_prepare"
+    | "session_start"
+    | "sync"
+    | "job_start"
+    | "job_wait"
+    | "job_logs"
+    | "job_cancel"
   title: string
   attempt: number
   status: RunbookStepStatus
@@ -1605,6 +1641,11 @@ export type VmDetail = {
   notes?: string
   workspaceRoot?: string
   repoUrl?: string
+  cacheRoot?: string
+  maxConcurrency?: number
+  weight?: number
+  retryCount?: number
+  retryBackoffSecs?: number
   facts?: VmFacts
   lastStatus: VmStatus
   lastSeenAt?: number
@@ -1630,6 +1671,96 @@ export type VmDraft = {
   notes?: string
   workspaceRoot?: string
   repoUrl?: string
+  cacheRoot?: string
+  maxConcurrency?: number
+  weight?: number
+  retryCount?: number
+  retryBackoffSecs?: number
+}
+
+export type VmRemoteSession = {
+  id: string
+  vmID: string
+  sessionID: string
+  status: "open" | "closed" | "error"
+  workspaceDir: string
+  workspaceRef: string
+  workspaceRepo: string
+  baseRef: string
+  lastSyncHash?: string
+  lastSyncAt?: number
+  runtime: "bun" | "node"
+  workerVersion: string
+  time: {
+    created: number
+    updated: number
+  }
+}
+
+export type VmRemoteSessionOpenInput = {
+  sessionID: string
+  vmID: string
+  baseDir?: string
+  repoUrl?: string
+  ref?: string
+  sparsePaths?: Array<string>
+  cacheRoot?: string
+  cacheDirs?: Array<string>
+}
+
+export type VmSyncStatus = {
+  vmSessionID: string
+  vmID: string
+  hash: string
+  uploaded: number
+  deleted: number
+  skipped: number
+  files: Array<string>
+  time: number
+}
+
+export type VmJob = {
+  id: string
+  vmSessionID: string
+  vmID: string
+  status: "running" | "completed" | "failed" | "cancelled"
+  command: string
+  cwd?: string
+  pid?: number
+  startedAt?: number
+  endedAt?: number
+  exitCode?: number
+  logDir?: string
+  time: {
+    created: number
+    updated: number
+  }
+}
+
+export type VmJobStartInput = {
+  vmSessionID: string
+  command: string
+  cwd?: string
+}
+
+export type VmJobLogs = {
+  id: string
+  status: "running" | "completed" | "failed" | "cancelled"
+  log: string
+  timedOut?: boolean
+}
+
+export type VmRemoteRead = {
+  output: string
+}
+
+export type VmRemoteGrep = {
+  output: string
+  matches: number
+}
+
+export type VmRemoteGlob = {
+  paths: Array<string>
 }
 
 export type RunbookSourcePolicy = "user_source_first" | "official_first"
@@ -1640,6 +1771,7 @@ export type RunbookRole = {
   match: Array<string>
   min?: number
   max?: number
+  max_parallel?: number
 }
 
 export type RunbookInput = {
@@ -1697,6 +1829,10 @@ export type RunbookExecStep = {
   targets: RunbookTargets
   mode?: "serial" | "parallel"
   concurrency?: number
+  fail_fast?: boolean
+  retry_count?: number
+  retry_backoff_secs?: number
+  load_aware?: boolean
   needs?: Array<string>
   command: string
   cwd?: string
@@ -1716,6 +1852,10 @@ export type RunbookUploadStep = {
   targets: RunbookTargets
   mode?: "serial" | "parallel"
   concurrency?: number
+  fail_fast?: boolean
+  retry_count?: number
+  retry_backoff_secs?: number
+  load_aware?: boolean
   needs?: Array<string>
   src_path?: string
   content?: string
@@ -1733,6 +1873,10 @@ export type RunbookDownloadStep = {
   targets: RunbookTargets
   mode?: "serial" | "parallel"
   concurrency?: number
+  fail_fast?: boolean
+  retry_count?: number
+  retry_backoff_secs?: number
+  load_aware?: boolean
   needs?: Array<string>
   remote_path: string
   local_name?: string
@@ -1751,10 +1895,142 @@ export type RunbookWorkspacePrepareStep = {
   }
   mode?: "serial" | "parallel"
   concurrency?: number
+  fail_fast?: boolean
+  retry_count?: number
+  retry_backoff_secs?: number
+  load_aware?: boolean
   needs?: Array<string>
   repo_url?: string
   ref?: string
   base_dir?: string
+  sparse_paths?: Array<string>
+  cache_root?: string
+  cache_dirs?: Array<string>
+  approval?: RunbookStepApproval
+}
+
+export type RunbookSessionStartStep = {
+  id: string
+  phase?: string
+  title: string
+  kind: "session_start"
+  targets: {
+    type: "roles"
+    roles: Array<string>
+  }
+  mode?: "serial" | "parallel"
+  concurrency?: number
+  fail_fast?: boolean
+  retry_count?: number
+  retry_backoff_secs?: number
+  load_aware?: boolean
+  needs?: Array<string>
+  repo_url?: string
+  ref?: string
+  base_dir?: string
+  sparse_paths?: Array<string>
+  cache_root?: string
+  cache_dirs?: Array<string>
+  approval?: RunbookStepApproval
+}
+
+export type RunbookSyncStep = {
+  id: string
+  phase?: string
+  title: string
+  kind: "sync"
+  targets: {
+    type: "roles"
+    roles: Array<string>
+  }
+  mode?: "serial" | "parallel"
+  concurrency?: number
+  fail_fast?: boolean
+  retry_count?: number
+  retry_backoff_secs?: number
+  load_aware?: boolean
+  needs?: Array<string>
+  include_untracked?: boolean
+  approval?: RunbookStepApproval
+}
+
+export type RunbookJobStartStep = {
+  id: string
+  phase?: string
+  title: string
+  kind: "job_start"
+  targets: {
+    type: "roles"
+    roles: Array<string>
+  }
+  mode?: "serial" | "parallel"
+  concurrency?: number
+  fail_fast?: boolean
+  retry_count?: number
+  retry_backoff_secs?: number
+  load_aware?: boolean
+  needs?: Array<string>
+  command: string
+  cwd?: string
+  approval?: RunbookStepApproval
+}
+
+export type RunbookJobWaitStep = {
+  id: string
+  phase?: string
+  title: string
+  kind: "job_wait"
+  targets: {
+    type: "roles"
+    roles: Array<string>
+  }
+  mode?: "serial" | "parallel"
+  concurrency?: number
+  fail_fast?: boolean
+  retry_count?: number
+  retry_backoff_secs?: number
+  load_aware?: boolean
+  needs?: Array<string>
+  timeout_ms?: number
+  approval?: RunbookStepApproval
+}
+
+export type RunbookJobLogsStep = {
+  id: string
+  phase?: string
+  title: string
+  kind: "job_logs"
+  targets: {
+    type: "roles"
+    roles: Array<string>
+  }
+  mode?: "serial" | "parallel"
+  concurrency?: number
+  fail_fast?: boolean
+  retry_count?: number
+  retry_backoff_secs?: number
+  load_aware?: boolean
+  needs?: Array<string>
+  tail?: number
+  approval?: RunbookStepApproval
+}
+
+export type RunbookJobCancelStep = {
+  id: string
+  phase?: string
+  title: string
+  kind: "job_cancel"
+  targets: {
+    type: "roles"
+    roles: Array<string>
+  }
+  mode?: "serial" | "parallel"
+  concurrency?: number
+  fail_fast?: boolean
+  retry_count?: number
+  retry_backoff_secs?: number
+  load_aware?: boolean
+  needs?: Array<string>
   approval?: RunbookStepApproval
 }
 
@@ -1764,6 +2040,12 @@ export type RunbookStep =
   | RunbookUploadStep
   | RunbookDownloadStep
   | RunbookWorkspacePrepareStep
+  | RunbookSessionStartStep
+  | RunbookSyncStep
+  | RunbookJobStartStep
+  | RunbookJobWaitStep
+  | RunbookJobLogsStep
+  | RunbookJobCancelStep
 
 export type RunbookDocument = {
   schema: "newton.runbook/v1"
@@ -2138,6 +2420,10 @@ export type FormatterStatus = {
   enabled: boolean
 }
 
+export type VmRemoteSessionStatusInput = string
+
+export type VmRemoteSessionCloseInput = string
+
 export type GlobalHealthData = {
   body?: never
   path?: never
@@ -2446,6 +2732,370 @@ export type VmActivityResponses = {
 
 export type VmActivityResponse = VmActivityResponses[keyof VmActivityResponses]
 
+export type VmSessionOpenData = {
+  body?: VmRemoteSessionOpenInput
+  path?: never
+  query?: {
+    directory?: string
+  }
+  url: "/vm/session"
+}
+
+export type VmSessionOpenErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type VmSessionOpenError = VmSessionOpenErrors[keyof VmSessionOpenErrors]
+
+export type VmSessionOpenResponses = {
+  /**
+   * VM remote session
+   */
+  200: VmRemoteSession
+}
+
+export type VmSessionOpenResponse = VmSessionOpenResponses[keyof VmSessionOpenResponses]
+
+export type VmSessionCloseData = {
+  body?: never
+  path: {
+    vmSessionID: string
+  }
+  query?: {
+    directory?: string
+  }
+  url: "/vm/session/{vmSessionID}"
+}
+
+export type VmSessionCloseErrors = {
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type VmSessionCloseError = VmSessionCloseErrors[keyof VmSessionCloseErrors]
+
+export type VmSessionCloseResponses = {
+  /**
+   * Closed VM remote session
+   */
+  200: VmRemoteSession
+}
+
+export type VmSessionCloseResponse = VmSessionCloseResponses[keyof VmSessionCloseResponses]
+
+export type VmSessionStatusData = {
+  body?: never
+  path: {
+    vmSessionID: string
+  }
+  query?: {
+    directory?: string
+  }
+  url: "/vm/session/{vmSessionID}"
+}
+
+export type VmSessionStatusErrors = {
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type VmSessionStatusError = VmSessionStatusErrors[keyof VmSessionStatusErrors]
+
+export type VmSessionStatusResponses = {
+  /**
+   * VM remote session
+   */
+  200: VmRemoteSession
+}
+
+export type VmSessionStatusResponse = VmSessionStatusResponses[keyof VmSessionStatusResponses]
+
+export type VmSyncData = {
+  body?: {
+    includeUntracked?: boolean
+  }
+  path: {
+    vmSessionID: string
+  }
+  query?: {
+    directory?: string
+  }
+  url: "/vm/session/{vmSessionID}/sync"
+}
+
+export type VmSyncErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type VmSyncError = VmSyncErrors[keyof VmSyncErrors]
+
+export type VmSyncResponses = {
+  /**
+   * Sync result
+   */
+  200: VmSyncStatus
+}
+
+export type VmSyncResponse = VmSyncResponses[keyof VmSyncResponses]
+
+export type VmJobStartData = {
+  body?: VmJobStartInput
+  path?: never
+  query?: {
+    directory?: string
+  }
+  url: "/vm/job"
+}
+
+export type VmJobStartErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type VmJobStartError = VmJobStartErrors[keyof VmJobStartErrors]
+
+export type VmJobStartResponses = {
+  /**
+   * VM job
+   */
+  200: VmJob
+}
+
+export type VmJobStartResponse = VmJobStartResponses[keyof VmJobStartResponses]
+
+export type VmJobLogsData = {
+  body?: never
+  path: {
+    vmJobID: string
+  }
+  query?: {
+    directory?: string
+    tail?: number
+    follow?: boolean
+  }
+  url: "/vm/job/{vmJobID}/logs"
+}
+
+export type VmJobLogsErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type VmJobLogsError = VmJobLogsErrors[keyof VmJobLogsErrors]
+
+export type VmJobLogsResponses = {
+  /**
+   * VM job logs
+   */
+  200: VmJobLogs
+}
+
+export type VmJobLogsResponse = VmJobLogsResponses[keyof VmJobLogsResponses]
+
+export type VmJobWaitData = {
+  body?: {
+    timeoutMs?: number
+  }
+  path: {
+    vmJobID: string
+  }
+  query?: {
+    directory?: string
+  }
+  url: "/vm/job/{vmJobID}/wait"
+}
+
+export type VmJobWaitErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type VmJobWaitError = VmJobWaitErrors[keyof VmJobWaitErrors]
+
+export type VmJobWaitResponses = {
+  /**
+   * VM job
+   */
+  200: VmJob
+}
+
+export type VmJobWaitResponse = VmJobWaitResponses[keyof VmJobWaitResponses]
+
+export type VmJobCancelData = {
+  body?: never
+  path: {
+    vmJobID: string
+  }
+  query?: {
+    directory?: string
+  }
+  url: "/vm/job/{vmJobID}/cancel"
+}
+
+export type VmJobCancelErrors = {
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type VmJobCancelError = VmJobCancelErrors[keyof VmJobCancelErrors]
+
+export type VmJobCancelResponses = {
+  /**
+   * VM job
+   */
+  200: VmJob
+}
+
+export type VmJobCancelResponse = VmJobCancelResponses[keyof VmJobCancelResponses]
+
+export type VmReadData = {
+  body?: {
+    path?: string
+    offset?: number
+    limit?: number
+  }
+  path: {
+    vmSessionID: string
+  }
+  query?: {
+    directory?: string
+  }
+  url: "/vm/session/{vmSessionID}/read"
+}
+
+export type VmReadErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type VmReadError = VmReadErrors[keyof VmReadErrors]
+
+export type VmReadResponses = {
+  /**
+   * VM remote read
+   */
+  200: VmRemoteRead
+}
+
+export type VmReadResponse = VmReadResponses[keyof VmReadResponses]
+
+export type VmGrepData = {
+  body?: {
+    pattern: string
+    path?: string
+    include?: string
+  }
+  path: {
+    vmSessionID: string
+  }
+  query?: {
+    directory?: string
+  }
+  url: "/vm/session/{vmSessionID}/grep"
+}
+
+export type VmGrepErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type VmGrepError = VmGrepErrors[keyof VmGrepErrors]
+
+export type VmGrepResponses = {
+  /**
+   * VM remote grep
+   */
+  200: VmRemoteGrep
+}
+
+export type VmGrepResponse = VmGrepResponses[keyof VmGrepResponses]
+
+export type VmGlobData = {
+  body?: {
+    pattern: string
+    path?: string
+  }
+  path: {
+    vmSessionID: string
+  }
+  query?: {
+    directory?: string
+  }
+  url: "/vm/session/{vmSessionID}/glob"
+}
+
+export type VmGlobErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type VmGlobError = VmGlobErrors[keyof VmGlobErrors]
+
+export type VmGlobResponses = {
+  /**
+   * VM remote glob
+   */
+  200: VmRemoteGlob
+}
+
+export type VmGlobResponse = VmGlobResponses[keyof VmGlobResponses]
+
 export type VmDeleteData = {
   body?: never
   path: {
@@ -2518,6 +3168,11 @@ export type VmUpdateData = {
     notes?: string
     workspaceRoot?: string
     repoUrl?: string
+    cacheRoot?: string
+    maxConcurrency?: number
+    weight?: number
+    retryCount?: number
+    retryBackoffSecs?: number
   }
   path: {
     vmID: string

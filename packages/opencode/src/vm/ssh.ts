@@ -2,7 +2,7 @@ import { Filesystem } from "@/util/filesystem"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
-import { Client, type ConnectConfig, type SFTPWrapper } from "ssh2"
+import { Client, type ClientChannel, type ConnectConfig, type SFTPWrapper } from "ssh2"
 import { VMWorkspace } from "./workspace"
 
 export namespace VMSSH {
@@ -147,6 +147,49 @@ export namespace VMSSH {
       timeout: 10_000,
     })
     return probe.code === 0 ? "bash" : "sh"
+  }
+
+  export async function runtime(client: Client): Promise<"bun" | "node"> {
+    const probe = await exec({
+      client,
+      command: [
+        "if command -v bun >/dev/null 2>&1; then",
+        "  printf 'bun'",
+        "elif command -v node >/dev/null 2>&1; then",
+        "  printf 'node'",
+        "else",
+        "  exit 1",
+        "fi",
+      ].join("\n"),
+      shell: "sh",
+      timeout: 10_000,
+    })
+    const value = probe.stdout.trim()
+    if (value === "bun" || value === "node") return value
+    throw new Error("Neither bun nor node is available on the VM")
+  }
+
+  export async function start(input: {
+    client: Client
+    command: string
+    cwd?: string
+    shell?: "bash" | "sh"
+    abort?: AbortSignal
+  }) {
+    const cmd = script(input.command, input.cwd, input.shell === "bash" ? "/bin/bash" : "/bin/sh")
+    return once<ClientChannel>((done) => {
+      input.client.exec(cmd, (err, stream) => {
+        if (err) {
+          done(err)
+          return
+        }
+        const abort = () => stream.close()
+        input.abort?.addEventListener("abort", abort, { once: true })
+        stream.once("close", () => input.abort?.removeEventListener("abort", abort))
+        stream.once("error", () => input.abort?.removeEventListener("abort", abort))
+        done(undefined, stream)
+      })
+    })
   }
 
   export async function exec(input: {
@@ -363,56 +406,86 @@ export namespace VMSSH {
     projectID: string
     repoUrl: string
     ref: string
+    sparsePaths?: string[]
+    cacheRoot?: string
+    cacheDirs?: string[]
   }): Promise<Workspace> {
     const paths = VMWorkspace.paths({
       root: input.baseDir,
       projectID: input.projectID,
+      repoUrl: input.repoUrl,
       ref: input.ref,
     })
+    const sparse = (input.sparsePaths ?? []).map(VMWorkspace.relative)
+    const cache = (input.cacheDirs ?? []).map(VMWorkspace.relative)
+    const lines = [
+      "set -eu",
+      "command -v git >/dev/null 2>&1 || { echo 'git is required on the VM' >&2; exit 1; }",
+      `mirror=${quote(paths.mirror)}`,
+      `wt=${quote(paths.wt)}`,
+      `url=${quote(input.repoUrl)}`,
+      `ref=${quote(input.ref)}`,
+      "dir=$(dirname \"$mirror\")",
+      "mkdir -p \"$dir\"",
+      "if [ -e \"$mirror\" ] && [ ! -d \"$mirror\" ]; then",
+      "  echo \"workspace mirror path is not a directory: $mirror\" >&2",
+      "  exit 1",
+      "fi",
+      "if [ ! -d \"$mirror\" ]; then",
+      "  git clone --mirror \"$url\" \"$mirror\"",
+      "fi",
+      "current=$(git -C \"$mirror\" remote get-url origin 2>/dev/null || true)",
+      "if [ -n \"$current\" ] && [ \"$current\" != \"$url\" ]; then",
+      "  echo \"workspace mirror origin mismatch: expected $url got $current\" >&2",
+      "  exit 1",
+      "fi",
+      "if [ -z \"$current\" ]; then",
+      "  git -C \"$mirror\" remote add origin \"$url\"",
+      "fi",
+      "git -C \"$mirror\" fetch --prune origin \"$ref\"",
+      "rev=$(git -C \"$mirror\" rev-parse FETCH_HEAD)",
+      "parent=$(dirname \"$wt\")",
+      "mkdir -p \"$parent\"",
+      "if [ -e \"$wt\" ] && [ ! -d \"$wt\" ]; then",
+      "  echo \"workspace path is not a directory: $wt\" >&2",
+      "  exit 1",
+      "fi",
+      "if [ -d \"$wt\" ]; then",
+      "  git -C \"$wt\" rev-parse --is-inside-work-tree >/dev/null 2>&1 || { echo \"workspace path is not a git worktree: $wt\" >&2; exit 1; }",
+      "else",
+      "  git -C \"$mirror\" worktree add --force --detach \"$wt\" \"$rev\"",
+      "fi",
+    ]
+    if (sparse.length > 0) {
+      lines.push("tmp=$(mktemp)")
+      lines.push(`printf '%s\\n' ${sparse.map((item) => quote(item)).join(" ")} > \"$tmp\"`)
+      lines.push("git -C \"$wt\" sparse-checkout init --no-cone >/dev/null 2>&1 || true")
+      lines.push("git -C \"$wt\" sparse-checkout set --stdin < \"$tmp\"")
+      lines.push("rm -f \"$tmp\"")
+    } else {
+      lines.push("git -C \"$wt\" sparse-checkout disable >/dev/null 2>&1 || true")
+    }
+    lines.push("git -C \"$wt\" reset --hard \"$rev\"")
+    if (input.cacheRoot && cache.length > 0) {
+      cache.forEach((dir) => {
+        lines.push(`shared=${quote(VMWorkspace.cache({ root: input.cacheRoot!, projectID: input.projectID, dir }))}`)
+        lines.push(`link=${quote(path.posix.join(paths.wt, dir))}`)
+        lines.push("mkdir -p \"$shared\"")
+        lines.push("mkdir -p \"$(dirname \"$link\")\"")
+        lines.push("if [ -e \"$link\" ] && [ ! -L \"$link\" ]; then")
+        lines.push("  echo \"cache link target already exists: $link\" >&2")
+        lines.push("  exit 1")
+        lines.push("fi")
+        lines.push("rm -f \"$link\"")
+        lines.push("ln -s \"$shared\" \"$link\"")
+      })
+    }
+    lines.push(`printf '%s\\n' \"$wt\" \"$rev\" \"$mirror\" \"$url\"`)
     const result = await exec({
       client: input.client,
       shell: "sh",
       timeout: 120_000,
-      command: [
-        "set -eu",
-        "command -v git >/dev/null 2>&1 || { echo 'git is required on the VM' >&2; exit 1; }",
-        `repo=${quote(paths.repo)}`,
-        `wt=${quote(paths.wt)}`,
-        `url=${quote(input.repoUrl)}`,
-        `ref=${quote(input.ref)}`,
-        "dir=$(dirname \"$repo\")",
-        "mkdir -p \"$dir\"",
-        "if [ -e \"$repo\" ] && [ ! -d \"$repo\" ]; then",
-        "  echo \"workspace repo path is not a directory: $repo\" >&2",
-        "  exit 1",
-        "fi",
-        "if [ ! -d \"$repo/.git\" ] && [ ! -f \"$repo/.git\" ]; then",
-        "  git clone --no-checkout \"$url\" \"$repo\"",
-        "fi",
-        "current=$(git -C \"$repo\" remote get-url origin 2>/dev/null || true)",
-        "if [ -n \"$current\" ] && [ \"$current\" != \"$url\" ]; then",
-        "  echo \"workspace repo origin mismatch: expected $url got $current\" >&2",
-        "  exit 1",
-        "fi",
-        "if [ -z \"$current\" ]; then",
-        "  git -C \"$repo\" remote add origin \"$url\"",
-        "fi",
-        "git -C \"$repo\" fetch --prune origin \"$ref\"",
-        "rev=$(git -C \"$repo\" rev-parse FETCH_HEAD)",
-        "parent=$(dirname \"$wt\")",
-        "mkdir -p \"$parent\"",
-        "if [ -e \"$wt\" ] && [ ! -d \"$wt\" ]; then",
-        "  echo \"workspace path is not a directory: $wt\" >&2",
-        "  exit 1",
-        "fi",
-        "if [ -d \"$wt\" ]; then",
-        "  git -C \"$wt\" rev-parse --is-inside-work-tree >/dev/null 2>&1 || { echo \"workspace path is not a git worktree: $wt\" >&2; exit 1; }",
-        "else",
-        "  git -C \"$repo\" worktree add --force --detach \"$wt\" \"$rev\"",
-        "fi",
-        "git -C \"$wt\" reset --hard \"$rev\"",
-        "printf '%s\\n' \"$wt\" \"$rev\" \"$repo\" \"$url\"",
-      ].join("\n"),
+      command: lines.join("\n"),
     })
     if (result.code !== 0) {
       throw new Error(result.stderr.trim() || result.stdout.trim() || `Failed to prepare workspace for ${input.ref}`)

@@ -5,7 +5,7 @@ import { Question } from "../../src/question"
 import { Runbook } from "../../src/runbook"
 import { Session } from "../../src/session"
 import { Instance } from "../../src/project/instance"
-import { VM } from "../../src/vm"
+import { VM, VMRemote } from "../../src/vm"
 import { VMSSH } from "../../src/vm/ssh"
 import { resetDatabase } from "../fixture/db"
 import { tmpdir } from "../fixture/fixture"
@@ -210,6 +210,172 @@ test("runbook workspace_prepare saves shared workspace facts", async () => {
       }
 
       expect(vm.name).toBe("runner-a")
+    },
+  })
+})
+
+test("runbook session_start, sync, and jobs persist handles and cleanup remote sessions", async () => {
+  await using tmp = await tmpdir()
+  await git(tmp.path)
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const vm = await VM.Create({
+        name: "runner-a",
+        hostname: "runner-a.local",
+        username: "root",
+        authType: "password",
+        password: "secret",
+        workspaceRoot: "/srv/opencode",
+      })
+      const session = await Session.create({})
+      const plan = Session.plan(session)
+      await mkdir(plan.replace(/[\\/][^\\/]+$/, ""), { recursive: true })
+      await Bun.write(
+        plan,
+        Runbook.Schema.stringify({
+          schema: "newton.runbook/v1",
+          title: "Remote worker flow",
+          roles: {
+            runners: {
+              match: ["runner-a"],
+            },
+          },
+          steps: [
+            {
+              id: "s1",
+              kind: "session_start",
+              title: "Start remote session",
+              targets: { type: "roles", roles: ["runners"] },
+            },
+            {
+              id: "s2",
+              kind: "sync",
+              title: "Sync changes",
+              targets: { type: "roles", roles: ["runners"] },
+            },
+            {
+              id: "s3",
+              kind: "job_start",
+              title: "Start job",
+              targets: { type: "roles", roles: ["runners"] },
+              command: "echo hi",
+            },
+            {
+              id: "s4",
+              kind: "job_wait",
+              title: "Wait job",
+              targets: { type: "roles", roles: ["runners"] },
+            },
+          ],
+          body: "Exercise remote handles through the runbook runtime.",
+        }),
+      )
+
+      const open = spyOn(VMRemote, "sessionOpen").mockResolvedValue({
+        id: "vms_test",
+        vmID: vm.id,
+        sessionID: session.id,
+        status: "open",
+        workspaceDir: "/srv/opencode/project/wt/dev",
+        workspaceRef: "abc123",
+        workspaceRepo: "/srv/opencode/project/mirror/repo.git",
+        baseRef: "abc123",
+        runtime: "node",
+        workerVersion: "1.2.20",
+        time: {
+          created: Date.now(),
+          updated: Date.now(),
+        },
+      })
+      const sync = spyOn(VMRemote, "sync").mockResolvedValue({
+        vmSessionID: "vms_test",
+        vmID: vm.id,
+        hash: "sync123",
+        uploaded: 1,
+        deleted: 0,
+        skipped: 0,
+        files: ["tracked.txt"],
+        time: Date.now(),
+      })
+      const start = spyOn(VMRemote, "jobStart").mockResolvedValue({
+        id: "vmj_test",
+        vmSessionID: "vms_test",
+        vmID: vm.id,
+        status: "running",
+        command: "echo hi",
+        cwd: "/srv/opencode/project/wt/dev",
+        pid: 123,
+        startedAt: Date.now(),
+        logDir: "/tmp/jobs/vmj_test",
+        time: {
+          created: Date.now(),
+          updated: Date.now(),
+        },
+      })
+      const wait = spyOn(VMRemote, "jobWait").mockResolvedValue({
+        id: "vmj_test",
+        vmSessionID: "vms_test",
+        vmID: vm.id,
+        status: "completed",
+        command: "echo hi",
+        cwd: "/srv/opencode/project/wt/dev",
+        pid: 123,
+        startedAt: Date.now() - 100,
+        endedAt: Date.now(),
+        exitCode: 0,
+        logDir: "/tmp/jobs/vmj_test",
+        time: {
+          created: Date.now(),
+          updated: Date.now(),
+        },
+      })
+      const close = spyOn(VMRemote, "sessionClose").mockResolvedValue({
+        id: "vms_test",
+        vmID: vm.id,
+        sessionID: session.id,
+        status: "closed",
+        workspaceDir: "/srv/opencode/project/wt/dev",
+        workspaceRef: "abc123",
+        workspaceRepo: "/srv/opencode/project/mirror/repo.git",
+        baseRef: "abc123",
+        runtime: "node",
+        workerVersion: "1.2.20",
+        time: {
+          created: Date.now(),
+          updated: Date.now(),
+        },
+      })
+
+      try {
+        const task = Runbook.execute({
+          sessionID: session.id,
+          abort: new AbortController().signal,
+        })
+
+        const q = await waitQuestion(session.id)
+        await Question.reply({
+          requestID: q.id,
+          answers: [[q.questions[0]!.options[0]!.label]],
+        })
+
+        const state = await task
+        expect(state.run?.status).toBe("completed")
+        expect(state.run?.facts.workspace_dir).toBe("/srv/opencode/project/wt/dev")
+        expect(state.run?.handles.vm_sessions[vm.id]).toBe("vms_test")
+        expect(state.run?.handles.syncs[vm.id]?.hash).toBe("sync123")
+        expect(state.run?.handles.vm_jobs[vm.id]).toBe("vmj_test")
+        expect(state.steps.every((step) => step.status === "completed")).toBe(true)
+        expect(close).toHaveBeenCalledWith({
+          vmSessionID: "vms_test",
+        })
+      } finally {
+        open.mockRestore()
+        sync.mockRestore()
+        start.mockRestore()
+        wait.mockRestore()
+        close.mockRestore()
+      }
     },
   })
 })

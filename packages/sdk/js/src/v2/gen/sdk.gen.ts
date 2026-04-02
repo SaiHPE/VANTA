@@ -152,7 +152,31 @@ import type {
   VmDraft,
   VmGetErrors,
   VmGetResponses,
+  VmGlobErrors,
+  VmGlobResponses,
+  VmGrepErrors,
+  VmGrepResponses,
+  VmJobCancelErrors,
+  VmJobCancelResponses,
+  VmJobLogsErrors,
+  VmJobLogsResponses,
+  VmJobStartErrors,
+  VmJobStartInput,
+  VmJobStartResponses,
+  VmJobWaitErrors,
+  VmJobWaitResponses,
   VmListResponses,
+  VmReadErrors,
+  VmReadResponses,
+  VmRemoteSessionOpenInput,
+  VmSessionCloseErrors,
+  VmSessionCloseResponses,
+  VmSessionOpenErrors,
+  VmSessionOpenResponses,
+  VmSessionStatusErrors,
+  VmSessionStatusResponses,
+  VmSyncErrors,
+  VmSyncResponses,
   VmTestDraftErrors,
   VmTestDraftResponses,
   VmTestErrors,
@@ -536,6 +560,395 @@ export class Vm extends HeyApiClient {
   }
 
   /**
+   * Open VM remote session
+   *
+   * Prepare a remote workspace, bootstrap the VM worker, and return a reusable VM session handle.
+   */
+  public sessionOpen<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      vmRemoteSessionOpenInput?: VmRemoteSessionOpenInput
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { key: "vmRemoteSessionOpenInput", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<VmSessionOpenResponses, VmSessionOpenErrors, ThrowOnError>({
+      url: "/vm/session",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Close VM remote session
+   *
+   * Shutdown the remote worker and close the VM session handle.
+   */
+  public sessionClose<ThrowOnError extends boolean = false>(
+    parameters: {
+      vmSessionID: string
+      directory?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "vmSessionID" },
+            { in: "query", key: "directory" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).delete<VmSessionCloseResponses, VmSessionCloseErrors, ThrowOnError>({
+      url: "/vm/session/{vmSessionID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Get VM remote session
+   *
+   * Get the current status and workspace metadata for a VM remote session.
+   */
+  public sessionStatus<ThrowOnError extends boolean = false>(
+    parameters: {
+      vmSessionID: string
+      directory?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "vmSessionID" },
+            { in: "query", key: "directory" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<VmSessionStatusResponses, VmSessionStatusErrors, ThrowOnError>({
+      url: "/vm/session/{vmSessionID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Sync local changes to VM session
+   *
+   * Upload changed local files into an active VM workspace session.
+   */
+  public sync<ThrowOnError extends boolean = false>(
+    parameters: {
+      vmSessionID: string
+      directory?: string
+      includeUntracked?: boolean
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "vmSessionID" },
+            { in: "query", key: "directory" },
+            { in: "body", key: "includeUntracked" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<VmSyncResponses, VmSyncErrors, ThrowOnError>({
+      url: "/vm/session/{vmSessionID}/sync",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Start VM job
+   *
+   * Start a long-running command inside an active VM session.
+   */
+  public jobStart<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      vmJobStartInput?: VmJobStartInput
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { key: "vmJobStartInput", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<VmJobStartResponses, VmJobStartErrors, ThrowOnError>({
+      url: "/vm/job",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Get VM job logs
+   *
+   * Read combined logs from a VM job.
+   */
+  public jobLogs<ThrowOnError extends boolean = false>(
+    parameters: {
+      vmJobID: string
+      directory?: string
+      tail?: number
+      follow?: boolean
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "vmJobID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "tail" },
+            { in: "query", key: "follow" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<VmJobLogsResponses, VmJobLogsErrors, ThrowOnError>({
+      url: "/vm/job/{vmJobID}/logs",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Wait for VM job
+   *
+   * Wait for a VM job to finish or until the timeout elapses.
+   */
+  public jobWait<ThrowOnError extends boolean = false>(
+    parameters: {
+      vmJobID: string
+      directory?: string
+      timeoutMs?: number
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "vmJobID" },
+            { in: "query", key: "directory" },
+            { in: "body", key: "timeoutMs" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<VmJobWaitResponses, VmJobWaitErrors, ThrowOnError>({
+      url: "/vm/job/{vmJobID}/wait",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Cancel VM job
+   *
+   * Cancel a running VM job.
+   */
+  public jobCancel<ThrowOnError extends boolean = false>(
+    parameters: {
+      vmJobID: string
+      directory?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "vmJobID" },
+            { in: "query", key: "directory" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<VmJobCancelResponses, VmJobCancelErrors, ThrowOnError>({
+      url: "/vm/job/{vmJobID}/cancel",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Read from VM session
+   *
+   * Read files or directories inside an active VM workspace session.
+   */
+  public read<ThrowOnError extends boolean = false>(
+    parameters: {
+      vmSessionID: string
+      directory?: string
+      path?: string
+      offset?: number
+      limit?: number
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "vmSessionID" },
+            { in: "query", key: "directory" },
+            { in: "body", key: "path" },
+            { in: "body", key: "offset" },
+            { in: "body", key: "limit" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<VmReadResponses, VmReadErrors, ThrowOnError>({
+      url: "/vm/session/{vmSessionID}/read",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Grep VM session
+   *
+   * Search file contents inside an active VM workspace session.
+   */
+  public grep<ThrowOnError extends boolean = false>(
+    parameters: {
+      vmSessionID: string
+      directory?: string
+      pattern?: string
+      path?: string
+      include?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "vmSessionID" },
+            { in: "query", key: "directory" },
+            { in: "body", key: "pattern" },
+            { in: "body", key: "path" },
+            { in: "body", key: "include" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<VmGrepResponses, VmGrepErrors, ThrowOnError>({
+      url: "/vm/session/{vmSessionID}/grep",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Glob VM session
+   *
+   * List matching files inside an active VM workspace session.
+   */
+  public glob<ThrowOnError extends boolean = false>(
+    parameters: {
+      vmSessionID: string
+      directory?: string
+      pattern?: string
+      path?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "vmSessionID" },
+            { in: "query", key: "directory" },
+            { in: "body", key: "pattern" },
+            { in: "body", key: "path" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<VmGlobResponses, VmGlobErrors, ThrowOnError>({
+      url: "/vm/session/{vmSessionID}/glob",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
    * Delete VM
    *
    * Delete a saved VM and its recorded activity.
@@ -616,6 +1029,11 @@ export class Vm extends HeyApiClient {
       notes?: string
       workspaceRoot?: string
       repoUrl?: string
+      cacheRoot?: string
+      maxConcurrency?: number
+      weight?: number
+      retryCount?: number
+      retryBackoffSecs?: number
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -638,6 +1056,11 @@ export class Vm extends HeyApiClient {
             { in: "body", key: "notes" },
             { in: "body", key: "workspaceRoot" },
             { in: "body", key: "repoUrl" },
+            { in: "body", key: "cacheRoot" },
+            { in: "body", key: "maxConcurrency" },
+            { in: "body", key: "weight" },
+            { in: "body", key: "retryCount" },
+            { in: "body", key: "retryBackoffSecs" },
           ],
         },
       ],

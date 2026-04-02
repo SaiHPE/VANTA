@@ -23,6 +23,11 @@ export const VmTable = sqliteTable(
     notes: text(),
     workspace_root: text(),
     repo_url: text(),
+    cache_root: text(),
+    max_concurrency: integer(),
+    weight: integer(),
+    retry_count: integer(),
+    retry_backoff_secs: integer(),
     os_name: text(),
     os_version: text(),
     kernel: text(),
@@ -38,6 +43,61 @@ export const VmTable = sqliteTable(
     index("vm_name_idx").on(table.name),
     index("vm_hostname_idx").on(table.hostname),
     index("vm_ip_idx").on(table.ip),
+  ],
+)
+
+export const VmRemoteSessionTable = sqliteTable(
+  "vm_remote_session",
+  {
+    id: text().primaryKey(),
+    vm_id: text()
+      .notNull()
+      .references(() => VmTable.id, { onDelete: "cascade" }),
+    session_id: text()
+      .notNull()
+      .references(() => SessionTable.id, { onDelete: "cascade" }),
+    status: text().notNull(),
+    workspace_dir: text().notNull(),
+    workspace_ref: text().notNull(),
+    workspace_repo: text().notNull(),
+    base_ref: text().notNull(),
+    last_sync_hash: text(),
+    last_sync_at: integer(),
+    runtime: text().notNull(),
+    worker_version: text().notNull(),
+    ...Timestamps,
+  },
+  (table) => [
+    index("vm_remote_session_vm_idx").on(table.vm_id),
+    index("vm_remote_session_session_idx").on(table.session_id),
+    index("vm_remote_session_status_idx").on(table.status),
+  ],
+)
+
+export const VmJobTable = sqliteTable(
+  "vm_job",
+  {
+    id: text().primaryKey(),
+    vm_session_id: text()
+      .notNull()
+      .references(() => VmRemoteSessionTable.id, { onDelete: "cascade" }),
+    vm_id: text()
+      .notNull()
+      .references(() => VmTable.id, { onDelete: "cascade" }),
+    status: text().notNull(),
+    command: text().notNull(),
+    cwd: text(),
+    pid: integer(),
+    started_at: integer(),
+    ended_at: integer(),
+    exit_code: integer(),
+    log_dir: text(),
+    ...Timestamps,
+  },
+  (table) => [
+    index("vm_job_session_idx").on(table.vm_session_id),
+    index("vm_job_vm_idx").on(table.vm_id),
+    index("vm_job_status_idx").on(table.status),
   ],
 )
 

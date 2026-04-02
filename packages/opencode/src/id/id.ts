@@ -13,6 +13,8 @@ export namespace Identifier {
     tool: "tool",
     vm: "vm",
     vm_activity: "vma",
+    vm_remote_session: "vms",
+    vm_job: "vmj",
     runbook_run: "rbr",
     runbook_step: "rbs",
   } as const

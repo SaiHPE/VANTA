@@ -15,6 +15,25 @@ export const RunbookRunTable = sqliteTable(
     step_idx: integer().notNull().$default(() => 0),
     bindings: text({ mode: "json" }).$type<Record<string, string[]>>(),
     facts: text({ mode: "json" }).$type<Record<string, string>>(),
+    handles: text({
+      mode: "json",
+    }).$type<{
+      vm_sessions?: Record<string, string>
+      vm_jobs?: Record<string, string>
+      syncs?: Record<
+        string,
+        {
+          vmSessionID: string
+          vmID: string
+          hash: string
+          uploaded: number
+          deleted: number
+          skipped: number
+          files: string[]
+          time: number
+        }
+      >
+    }>(),
     approval: text({ mode: "json" }).$type<{
       confirmed?: boolean
       roles?: Record<string, string[]>

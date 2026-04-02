@@ -24,6 +24,14 @@ export namespace VMWorkspace {
     return next || "ref"
   }
 
+  export function relative(value: string) {
+    const next = path.posix.normalize(value.trim()).replace(/^\/+/, "")
+    if (!next || next === "." || next.startsWith("..")) {
+      throw new Error(`Expected a workspace-relative path, received "${value}"`)
+    }
+    return next
+  }
+
   export function repo(input: {
     repoUrl?: string
     fallback?: string
@@ -54,11 +62,22 @@ export namespace VMWorkspace {
   export function paths(input: {
     root: string
     projectID: string
+    repoUrl: string
     ref: string
   }) {
-    const repo = path.posix.join(input.root, input.projectID, "repo")
-    const wt = path.posix.join(input.root, input.projectID, "wt", `${slug(input.ref)}-${hash(input.ref)}`)
-    return { repo, wt }
+    const repo = `${slug(input.repoUrl)}-${hash(input.repoUrl)}`
+    const key = `${slug(input.ref)}-${hash(input.ref)}`
+    const mirror = path.posix.join(input.root, input.projectID, "mirror", `${repo}.git`)
+    const wt = path.posix.join(input.root, input.projectID, "wt", repo, key)
+    return { mirror, wt }
+  }
+
+  export function cache(input: {
+    root: string
+    projectID: string
+    dir: string
+  }) {
+    return path.posix.join(input.root, input.projectID, `${slug(input.dir)}-${hash(input.dir)}`)
   }
 
   export async function local(input: {

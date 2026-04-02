@@ -24,6 +24,11 @@ type Form = {
   notes: string
   workspaceRoot: string
   repoUrl: string
+  cacheRoot: string
+  maxConcurrency: string
+  weight: string
+  retryCount: string
+  retryBackoffSecs: string
 }
 
 const auth = [
@@ -45,6 +50,11 @@ function blank(): Form {
     notes: "",
     workspaceRoot: "",
     repoUrl: "",
+    cacheRoot: "",
+    maxConcurrency: "1",
+    weight: "1",
+    retryCount: "0",
+    retryBackoffSecs: "2",
   }
 }
 
@@ -62,6 +72,11 @@ function fill(vm: Partial<VmDetail>): Form {
     notes: vm.notes ?? "",
     workspaceRoot: vm.workspaceRoot ?? "",
     repoUrl: vm.repoUrl ?? "",
+    cacheRoot: vm.cacheRoot ?? "",
+    maxConcurrency: vm.maxConcurrency ? String(vm.maxConcurrency) : "1",
+    weight: vm.weight ? String(vm.weight) : "1",
+    retryCount: vm.retryCount ? String(vm.retryCount) : "0",
+    retryBackoffSecs: vm.retryBackoffSecs ? String(vm.retryBackoffSecs) : "2",
   }
 }
 
@@ -73,6 +88,10 @@ function trim(value: string) {
 function data(form: Form) {
   const raw = form.port.trim()
   const port = raw ? Number(raw) : undefined
+  const maxConcurrency = Number(form.maxConcurrency.trim())
+  const weight = Number(form.weight.trim())
+  const retryCount = Number(form.retryCount.trim())
+  const retryBackoffSecs = Number(form.retryBackoffSecs.trim())
   return {
     name: form.name.trim(),
     hostname: trim(form.hostname),
@@ -86,6 +105,11 @@ function data(form: Form) {
     notes: trim(form.notes),
     workspaceRoot: trim(form.workspaceRoot),
     repoUrl: trim(form.repoUrl),
+    cacheRoot: trim(form.cacheRoot),
+    maxConcurrency: Number.isFinite(maxConcurrency) && maxConcurrency > 0 ? maxConcurrency : undefined,
+    weight: Number.isFinite(weight) && weight > 0 ? weight : undefined,
+    retryCount: Number.isFinite(retryCount) && retryCount >= 0 ? retryCount : undefined,
+    retryBackoffSecs: Number.isFinite(retryBackoffSecs) && retryBackoffSecs > 0 ? retryBackoffSecs : undefined,
   }
 }
 
@@ -512,6 +536,36 @@ export function SettingsVMs() {
                   onChange={(value) => patch("repoUrl", value)}
                   placeholder="git@github.com:org/repo.git"
                 />
+                <Input
+                  label="Cache root"
+                  value={form.cacheRoot}
+                  onChange={(value) => patch("cacheRoot", value)}
+                  placeholder="/var/tmp/opencode-cache"
+                />
+                <Input
+                  label="Max concurrency"
+                  value={form.maxConcurrency}
+                  onChange={(value) => patch("maxConcurrency", value)}
+                  placeholder="1"
+                />
+                <Input
+                  label="Weight"
+                  value={form.weight}
+                  onChange={(value) => patch("weight", value)}
+                  placeholder="1"
+                />
+                <Input
+                  label="Retry count"
+                  value={form.retryCount}
+                  onChange={(value) => patch("retryCount", value)}
+                  placeholder="0"
+                />
+                <Input
+                  label="Retry backoff secs"
+                  value={form.retryBackoffSecs}
+                  onChange={(value) => patch("retryBackoffSecs", value)}
+                  placeholder="2"
+                />
               </div>
               <Show when={form.authType === "password"}>
                 <Input
@@ -569,6 +623,20 @@ export function SettingsVMs() {
                 <Item label="Home" value={view()?.facts?.homeDir} />
                 <Item label="Workspace root" value={view()?.workspaceRoot} />
                 <Item label="Repo URL" value={view()?.repoUrl} />
+                <Item label="Cache root" value={view()?.cacheRoot} />
+                <Item
+                  label="Max concurrency"
+                  value={view()?.maxConcurrency !== undefined ? String(view()?.maxConcurrency) : undefined}
+                />
+                <Item label="Weight" value={view()?.weight !== undefined ? String(view()?.weight) : undefined} />
+                <Item
+                  label="Retry count"
+                  value={view()?.retryCount !== undefined ? String(view()?.retryCount) : undefined}
+                />
+                <Item
+                  label="Retry backoff secs"
+                  value={view()?.retryBackoffSecs !== undefined ? String(view()?.retryBackoffSecs) : undefined}
+                />
               </div>
             </div>
 

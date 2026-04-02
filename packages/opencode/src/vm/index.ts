@@ -60,6 +60,11 @@ export namespace VM {
       notes: z.string().optional(),
       workspaceRoot: z.string().optional(),
       repoUrl: z.string().optional(),
+      cacheRoot: z.string().optional(),
+      maxConcurrency: z.number().int().positive().optional(),
+      weight: z.number().int().positive().optional(),
+      retryCount: z.number().int().min(0).optional(),
+      retryBackoffSecs: z.number().int().positive().optional(),
       facts: Facts.optional(),
       lastStatus: Status,
       lastSeenAt: z.number().optional(),
@@ -81,6 +86,69 @@ export namespace VM {
     ref: "VMDetail",
   })
   export type Detail = z.infer<typeof Detail>
+
+  export const RemoteSession = z
+    .object({
+      id: Identifier.schema("vm_remote_session"),
+      vmID: Identifier.schema("vm"),
+      sessionID: z.string(),
+      status: z.enum(["open", "closed", "error"]),
+      workspaceDir: z.string(),
+      workspaceRef: z.string(),
+      workspaceRepo: z.string(),
+      baseRef: z.string(),
+      lastSyncHash: z.string().optional(),
+      lastSyncAt: z.number().optional(),
+      runtime: z.enum(["bun", "node"]),
+      workerVersion: z.string(),
+      time: z.object({
+        created: z.number(),
+        updated: z.number(),
+      }),
+    })
+    .meta({
+      ref: "VMRemoteSession",
+    })
+  export type RemoteSession = z.infer<typeof RemoteSession>
+
+  export const Job = z
+    .object({
+      id: Identifier.schema("vm_job"),
+      vmSessionID: Identifier.schema("vm_remote_session"),
+      vmID: Identifier.schema("vm"),
+      status: z.enum(["running", "completed", "failed", "cancelled"]),
+      command: z.string(),
+      cwd: z.string().optional(),
+      pid: z.number().int().optional(),
+      startedAt: z.number().optional(),
+      endedAt: z.number().optional(),
+      exitCode: z.number().int().optional(),
+      logDir: z.string().optional(),
+      time: z.object({
+        created: z.number(),
+        updated: z.number(),
+      }),
+    })
+    .meta({
+      ref: "VMJob",
+    })
+  export type Job = z.infer<typeof Job>
+
+  export const SyncStatus = z
+    .object({
+      vmSessionID: Identifier.schema("vm_remote_session"),
+      vmID: Identifier.schema("vm"),
+      hash: z.string(),
+      uploaded: z.number().int(),
+      deleted: z.number().int(),
+      skipped: z.number().int(),
+      files: z.array(z.string()),
+      time: z.number(),
+    })
+    .meta({
+      ref: "VMSyncStatus",
+    })
+  export type SyncStatus = z.infer<typeof SyncStatus>
 
   export const Activity = z
     .object({
@@ -123,6 +191,11 @@ export namespace VM {
       notes: z.string().optional(),
       workspaceRoot: z.string().optional(),
       repoUrl: z.string().optional(),
+      cacheRoot: z.string().optional(),
+      maxConcurrency: z.number().int().positive().optional(),
+      weight: z.number().int().positive().optional(),
+      retryCount: z.number().int().min(0).optional(),
+      retryBackoffSecs: z.number().int().positive().optional(),
     })
     .meta({
       ref: "VMDraft",
@@ -186,6 +259,11 @@ export namespace VM {
             notes: result.notes ?? null,
             workspace_root: result.workspaceRoot ?? null,
             repo_url: result.repoUrl ?? null,
+            cache_root: result.cacheRoot ?? null,
+            max_concurrency: result.maxConcurrency ?? null,
+            weight: result.weight ?? null,
+            retry_count: result.retryCount ?? null,
+            retry_backoff_secs: result.retryBackoffSecs ?? null,
             time_updated: result.time.updated,
           })
           .where(and(eq(VmTable.project_id, Instance.project.id), eq(VmTable.id, input.vmID)))
@@ -263,6 +341,11 @@ export namespace VM {
     const notes = clean(input.notes)
     const workspaceRoot = clean(input.workspaceRoot)
     const repoUrl = clean(input.repoUrl)
+    const cacheRoot = clean(input.cacheRoot)
+    const maxConcurrency = input.maxConcurrency ?? undefined
+    const weight = input.weight ?? undefined
+    const retryCount = input.retryCount ?? undefined
+    const retryBackoffSecs = input.retryBackoffSecs ?? undefined
     const port = input.port ?? 22
 
     if (!name) throw new Error("VM name is required")
@@ -284,6 +367,11 @@ export namespace VM {
       notes,
       workspaceRoot,
       repoUrl,
+      cacheRoot,
+      maxConcurrency,
+      weight,
+      retryCount,
+      retryBackoffSecs,
     } satisfies Omit<Detail, "id" | "projectID" | "facts" | "lastStatus" | "lastSeenAt" | "time">
   }
 
@@ -320,6 +408,11 @@ export namespace VM {
       notes: input.notes,
       workspaceRoot: input.workspaceRoot,
       repoUrl: input.repoUrl,
+      cacheRoot: input.cacheRoot,
+      maxConcurrency: input.maxConcurrency,
+      weight: input.weight,
+      retryCount: input.retryCount,
+      retryBackoffSecs: input.retryBackoffSecs,
       facts: input.facts,
       lastStatus: input.lastStatus,
       lastSeenAt: input.lastSeenAt,
@@ -343,6 +436,11 @@ export namespace VM {
       notes: input.notes ?? null,
       workspace_root: input.workspaceRoot ?? null,
       repo_url: input.repoUrl ?? null,
+      cache_root: input.cacheRoot ?? null,
+      max_concurrency: input.maxConcurrency ?? null,
+      weight: input.weight ?? null,
+      retry_count: input.retryCount ?? null,
+      retry_backoff_secs: input.retryBackoffSecs ?? null,
       os_name: input.facts?.osName ?? null,
       os_version: input.facts?.osVersion ?? null,
       kernel: input.facts?.kernel ?? null,
@@ -372,6 +470,11 @@ export namespace VM {
       notes: row.notes ?? undefined,
       workspaceRoot: row.workspace_root ?? undefined,
       repoUrl: row.repo_url ?? undefined,
+      cacheRoot: row.cache_root ?? undefined,
+      maxConcurrency: row.max_concurrency ?? undefined,
+      weight: row.weight ?? undefined,
+      retryCount: row.retry_count ?? undefined,
+      retryBackoffSecs: row.retry_backoff_secs ?? undefined,
       facts: shape(row),
       lastStatus: Status.parse(row.last_status),
       lastSeenAt: row.last_seen_at ?? undefined,

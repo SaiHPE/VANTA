@@ -1,6 +1,7 @@
 import { Instance } from "@/project/instance"
+import { Identifier } from "@/id/id"
 import { Tool } from "./tool"
-import { VM } from "@/vm"
+import { VM, VMRemote } from "@/vm"
 import { VMSSH } from "@/vm/ssh"
 import { VMOperate } from "@/vm/operate"
 import { VMWorkspace } from "@/vm/workspace"
@@ -8,6 +9,8 @@ import path from "path"
 import z from "zod"
 
 const Targets = z.union([z.string(), z.array(z.string()).min(1)])
+const SessionIDs = z.union([Identifier.schema("vm_remote_session"), z.array(Identifier.schema("vm_remote_session")).min(1)])
+const JobIDs = z.union([Identifier.schema("vm_job"), z.array(Identifier.schema("vm_job")).min(1)])
 const Shell = z.enum(["auto", "bash", "sh"])
 const Mode = z.enum(["serial", "parallel"])
 const Concurrency = z.number().int().positive().default(VMWorkspace.DEFAULT_CONCURRENCY)
@@ -32,6 +35,34 @@ function listOutput(items: VM.Detail[]) {
         .join(" "),
     )
     .join("\n")
+}
+
+function lines(input: string | string[]) {
+  return Array.isArray(input) ? input : [input]
+}
+
+async function batch<T>(input: {
+  items: string[]
+  mode?: "serial" | "parallel"
+  concurrency?: number
+  work: (item: string, idx: number) => Promise<T>
+}) {
+  if (input.mode !== "parallel") {
+    return input.items.reduce(
+      (acc, item, idx) => acc.then(async (list) => [...list, await input.work(item, idx)]),
+      Promise.resolve([] as T[]),
+    )
+  }
+  const out = Array<T>(input.items.length)
+  let idx = 0
+  const next = async (): Promise<void> => {
+    const cur = idx++
+    if (cur >= input.items.length) return
+    out[cur] = await input.work(input.items[cur]!, cur)
+    await next()
+  }
+  await Promise.all(Array.from({ length: Math.min(input.concurrency ?? VMWorkspace.DEFAULT_CONCURRENCY, input.items.length) }, () => next()))
+  return out
 }
 
 async function confirm(ctx: Tool.Context, targets: string | string[]) {
@@ -381,5 +412,363 @@ export const VMDownloadTool = Tool.define("vm_download", {
         return failure(vm, "download-error", err)
       },
     })
+  },
+})
+
+export const VMSessionTool = Tool.define("vm_session", {
+  description: "Open, inspect, or close a persistent remote opencode worker session inside one or more Linux VMs.",
+  parameters: z
+    .object({
+      action: z.enum(["open", "status", "close"]),
+      targets: Targets.optional(),
+      vm_session_id: SessionIDs.optional(),
+      base_dir: z.string().optional(),
+      repo_url: z.string().optional(),
+      ref: z.string().optional(),
+      sparse_paths: z.array(z.string()).optional(),
+      cache_root: z.string().optional(),
+      cache_dirs: z.array(z.string()).optional(),
+      mode: Mode.default("serial"),
+      concurrency: Concurrency,
+    })
+    .superRefine((input, issue) => {
+      if (input.action === "open" && !input.targets) {
+        issue.addIssue({ code: z.ZodIssueCode.custom, path: ["targets"], message: "targets are required when action=open" })
+      }
+      if (input.action !== "open" && !input.vm_session_id) {
+        issue.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["vm_session_id"],
+          message: "vm_session_id is required when action is status or close",
+        })
+      }
+    }),
+  async execute(input, ctx) {
+    if (input.action === "open") {
+      return run({
+        ctx,
+        tool: "vm_session",
+        targets: input.targets!,
+        title: "Opening remote VM session",
+        mode: input.mode,
+        concurrency: input.concurrency,
+        async work(vm, push) {
+          const value = await VMRemote.sessionOpen({
+            sessionID: ctx.sessionID,
+            vmID: vm.id,
+            baseDir: input.base_dir,
+            repoUrl: input.repo_url,
+            ref: input.ref,
+            sparsePaths: input.sparse_paths,
+            cacheRoot: input.cache_root,
+            cacheDirs: input.cache_dirs,
+            abort: ctx.abort,
+          })
+          push(value.workspaceDir)
+          return value
+        },
+        done(_vm, value) {
+          return {
+            summary: `opened ${value.workspaceDir}`,
+            output: [
+              `vm_session_id=${value.id}`,
+              `workspace_dir=${value.workspaceDir}`,
+              `workspace_ref=${value.workspaceRef}`,
+              `workspace_repo=${value.workspaceRepo}`,
+            ].join("\n"),
+            ran: true,
+          }
+        },
+        fail(vm, err) {
+          return failure(vm, "session-open-error", err)
+        },
+      })
+    }
+
+    const ids = lines(input.vm_session_id!)
+    if (input.action === "status") {
+      const items = await batch({
+        items: ids,
+        mode: input.mode,
+        concurrency: input.concurrency,
+        work: (id) => VMRemote.session({ vmSessionID: id }),
+      })
+      return {
+        title: `Loaded ${items.length} VM session${items.length === 1 ? "" : "s"}`,
+        output: items
+          .map((item) =>
+            [
+              `vm_session_id=${item.id}`,
+              `vm_id=${item.vmID}`,
+              `status=${item.status}`,
+              `workspace_dir=${item.workspaceDir}`,
+              `workspace_ref=${item.workspaceRef}`,
+            ].join(" "),
+          )
+          .join("\n"),
+        metadata: {
+          activity_ids: {},
+          artifacts: [],
+          output: undefined,
+          count: items.length,
+        },
+      }
+    }
+
+    const items = await batch({
+      items: ids,
+      mode: input.mode,
+      concurrency: input.concurrency,
+      work: (id) => VMRemote.sessionClose({ vmSessionID: id }),
+    })
+    return {
+      title: `Closed ${items.length} VM session${items.length === 1 ? "" : "s"}`,
+      output: items.map((item) => `${item.id} ${item.status}`).join("\n"),
+      metadata: {
+        activity_ids: {},
+        artifacts: [],
+        output: undefined,
+        count: items.length,
+      },
+    }
+  },
+})
+
+export const VMSyncTool = Tool.define("vm_sync", {
+  description: "Overlay changed local working-tree files onto one or more prepared remote VM sessions.",
+  parameters: z.object({
+    vm_session_id: SessionIDs,
+    include_untracked: z.boolean().default(false),
+    mode: Mode.default("serial"),
+    concurrency: Concurrency,
+  }),
+  async execute(input) {
+    const items = await batch({
+      items: lines(input.vm_session_id),
+      mode: input.mode,
+      concurrency: input.concurrency,
+      work: (id) =>
+        VMRemote.sync({
+          vmSessionID: id,
+          includeUntracked: input.include_untracked,
+        }),
+    })
+    return {
+      title: `Synced ${items.length} VM session${items.length === 1 ? "" : "s"}`,
+      output: items
+        .map((item) =>
+          [
+            `vm_session_id=${item.vmSessionID}`,
+            `hash=${item.hash}`,
+            `uploaded=${item.uploaded}`,
+            `deleted=${item.deleted}`,
+            `skipped=${item.skipped}`,
+          ].join(" "),
+        )
+        .join("\n"),
+      metadata: {
+        count: items.length,
+      },
+    }
+  },
+})
+
+export const VMJobStartTool = Tool.define("vm_job_start", {
+  description: "Start a long-running command inside one or more active remote VM sessions.",
+  parameters: z.object({
+    vm_session_id: SessionIDs,
+    command: z.string().min(1),
+    cwd: z.string().optional(),
+    mode: Mode.default("serial"),
+    concurrency: Concurrency,
+  }),
+  async execute(input) {
+    const items = await batch({
+      items: lines(input.vm_session_id),
+      mode: input.mode,
+      concurrency: input.concurrency,
+      work: (id) =>
+        VMRemote.jobStart({
+          vmSessionID: id,
+          command: input.command,
+          cwd: input.cwd,
+        }),
+    })
+    return {
+      title: `Started ${items.length} VM job${items.length === 1 ? "" : "s"}`,
+      output: items.map((item) => [`vm_job_id=${item.id}`, `status=${item.status}`, `cwd=${item.cwd ?? ""}`].filter(Boolean).join(" ")).join("\n"),
+      metadata: {
+        count: items.length,
+      },
+    }
+  },
+})
+
+export const VMJobLogsTool = Tool.define("vm_job_logs", {
+  description: "Read logs from one or more VM jobs.",
+  parameters: z.object({
+    vm_job_id: JobIDs,
+    tail: z.number().int().positive().optional(),
+    follow: z.boolean().default(false),
+    mode: Mode.default("serial"),
+    concurrency: Concurrency,
+  }),
+  async execute(input) {
+    const items = await batch({
+      items: lines(input.vm_job_id),
+      mode: input.mode,
+      concurrency: input.concurrency,
+      work: (id) =>
+        VMRemote.jobLogs({
+          vmJobID: id,
+          tail: input.tail,
+          follow: input.follow,
+        }),
+    })
+    return {
+      title: `Loaded ${items.length} VM job log${items.length === 1 ? "" : "s"}`,
+      output: items.map((item) => [`[${item.id}]`, item.log].join("\n")).join("\n\n"),
+      metadata: {
+        count: items.length,
+      },
+    }
+  },
+})
+
+export const VMJobWaitTool = Tool.define("vm_job_wait", {
+  description: "Wait for one or more VM jobs to complete.",
+  parameters: z.object({
+    vm_job_id: JobIDs,
+    timeout_ms: z.number().int().positive().optional(),
+    mode: Mode.default("serial"),
+    concurrency: Concurrency,
+  }),
+  async execute(input) {
+    const items = await batch({
+      items: lines(input.vm_job_id),
+      mode: input.mode,
+      concurrency: input.concurrency,
+      work: (id) =>
+        VMRemote.jobWait({
+          vmJobID: id,
+          timeoutMs: input.timeout_ms,
+        }),
+    })
+    return {
+      title: `Waited on ${items.length} VM job${items.length === 1 ? "" : "s"}`,
+      output: items
+        .map((item) =>
+          [
+            `vm_job_id=${item.id}`,
+            `status=${item.status}`,
+            typeof item.exitCode === "number" ? `exit=${item.exitCode}` : "",
+            "timedOut" in item && item.timedOut ? "timed_out=true" : "",
+          ]
+            .filter(Boolean)
+            .join(" "),
+        )
+        .join("\n"),
+      metadata: {
+        count: items.length,
+      },
+    }
+  },
+})
+
+export const VMJobCancelTool = Tool.define("vm_job_cancel", {
+  description: "Cancel one or more running VM jobs.",
+  parameters: z.object({
+    vm_job_id: JobIDs,
+    mode: Mode.default("serial"),
+    concurrency: Concurrency,
+  }),
+  async execute(input) {
+    const items = await batch({
+      items: lines(input.vm_job_id),
+      mode: input.mode,
+      concurrency: input.concurrency,
+      work: (id) =>
+        VMRemote.jobCancel({
+          vmJobID: id,
+        }),
+    })
+    return {
+      title: `Cancelled ${items.length} VM job${items.length === 1 ? "" : "s"}`,
+      output: items.map((item) => `${item.id} ${item.status}`).join("\n"),
+      metadata: {
+        count: items.length,
+      },
+    }
+  },
+})
+
+export const VMReadTool = Tool.define("vm_read", {
+  description: "Read files or directories inside an active remote VM workspace session.",
+  parameters: z.object({
+    vm_session_id: Identifier.schema("vm_remote_session"),
+    path: z.string().optional(),
+    offset: z.number().int().positive().optional(),
+    limit: z.number().int().positive().optional(),
+  }),
+  async execute(input) {
+    const result = await VMRemote.remoteRead({
+      vmSessionID: input.vm_session_id,
+      path: input.path,
+      offset: input.offset,
+      limit: input.limit,
+    })
+    return {
+      title: "Remote read",
+      output: result.output,
+      metadata: {},
+    }
+  },
+})
+
+export const VMGrepTool = Tool.define("vm_grep", {
+  description: "Search file contents inside an active remote VM workspace session.",
+  parameters: z.object({
+    vm_session_id: Identifier.schema("vm_remote_session"),
+    pattern: z.string().min(1),
+    path: z.string().optional(),
+    include: z.string().optional(),
+  }),
+  async execute(input) {
+    const result = await VMRemote.remoteGrep({
+      vmSessionID: input.vm_session_id,
+      pattern: input.pattern,
+      path: input.path,
+      include: input.include,
+    })
+    return {
+      title: input.pattern,
+      output: result.output,
+      metadata: {
+        matches: result.matches,
+      },
+    }
+  },
+})
+
+export const VMGlobTool = Tool.define("vm_glob", {
+  description: "List files in an active remote VM workspace session using a glob pattern.",
+  parameters: z.object({
+    vm_session_id: Identifier.schema("vm_remote_session"),
+    pattern: z.string().min(1),
+    path: z.string().optional(),
+  }),
+  async execute(input) {
+    const result = await VMRemote.remoteGlob({
+      vmSessionID: input.vm_session_id,
+      pattern: input.pattern,
+      path: input.path,
+    })
+    return {
+      title: input.pattern,
+      output: result.paths.length > 0 ? result.paths.join("\n") : "No files found",
+      metadata: {
+        count: result.paths.length,
+      },
+    }
   },
 })

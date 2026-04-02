@@ -51,6 +51,7 @@ export const Role = z
     match: z.array(nonEmpty).min(1),
     min: z.number().int().positive().default(1),
     max: z.number().int().positive().optional(),
+    max_parallel: z.number().int().positive().optional(),
   })
   .superRefine((input, ctx) => {
     if (input.max !== undefined && input.max < input.min) {
@@ -102,6 +103,18 @@ const StepBase = z.object({
 
 const StepMode = z.enum(["serial", "parallel"]).default("serial")
 const StepConcurrency = z.number().int().positive().default(VMWorkspace.DEFAULT_CONCURRENCY)
+const StepFailFast = z.boolean().default(false)
+const StepRetryCount = z.number().int().min(0).default(0)
+const StepRetryBackoff = z.number().int().positive().default(2)
+const StepLoadAware = z.boolean().default(true)
+const StepSchedule = {
+  mode: StepMode,
+  concurrency: StepConcurrency,
+  fail_fast: StepFailFast,
+  retry_count: StepRetryCount,
+  retry_backoff_secs: StepRetryBackoff,
+  load_aware: StepLoadAware,
+}
 
 export const QuestionStep = StepBase.extend({
   kind: z.literal("question"),
@@ -126,8 +139,7 @@ export const ExecStep = StepBase.extend({
   kind: z.literal("exec"),
   intent: z.enum(["read", "write"]),
   targets: Targets,
-  mode: StepMode,
-  concurrency: StepConcurrency,
+  ...StepSchedule,
   needs: z.array(nonEmpty).default([]),
   command: nonEmpty,
   cwd: z.string().optional(),
@@ -144,8 +156,7 @@ export const ExecStep = StepBase.extend({
 export const UploadStep = StepBase.extend({
   kind: z.literal("upload"),
   targets: Targets,
-  mode: StepMode,
-  concurrency: StepConcurrency,
+  ...StepSchedule,
   needs: z.array(nonEmpty).default([]),
   src_path: z.string().optional(),
   content: z.string().optional(),
@@ -177,8 +188,7 @@ export const UploadStep = StepBase.extend({
 export const DownloadStep = StepBase.extend({
   kind: z.literal("download"),
   targets: Targets,
-  mode: StepMode,
-  concurrency: StepConcurrency,
+  ...StepSchedule,
   needs: z.array(nonEmpty).default([]),
   remote_path: nonEmpty,
   local_name: z.string().optional(),
@@ -191,19 +201,104 @@ export const DownloadStep = StepBase.extend({
 export const WorkspaceStep = StepBase.extend({
   kind: z.literal("workspace_prepare"),
   targets: z.object({ type: z.literal("roles"), roles: z.array(nonEmpty).min(1) }),
-  mode: StepMode,
-  concurrency: StepConcurrency,
+  ...StepSchedule,
   needs: z.array(nonEmpty).default([]),
   repo_url: z.string().optional(),
   ref: z.string().optional(),
   base_dir: z.string().optional(),
+  sparse_paths: z.array(nonEmpty).default([]),
+  cache_root: z.string().optional(),
+  cache_dirs: z.array(nonEmpty).default([]),
   approval: StepApproval.default("inherit"),
 }).meta({
   ref: "RunbookWorkspacePrepareStep",
 })
 
+export const SessionStartStep = StepBase.extend({
+  kind: z.literal("session_start"),
+  targets: z.object({ type: z.literal("roles"), roles: z.array(nonEmpty).min(1) }),
+  ...StepSchedule,
+  needs: z.array(nonEmpty).default([]),
+  repo_url: z.string().optional(),
+  ref: z.string().optional(),
+  base_dir: z.string().optional(),
+  sparse_paths: z.array(nonEmpty).default([]),
+  cache_root: z.string().optional(),
+  cache_dirs: z.array(nonEmpty).default([]),
+  approval: StepApproval.default("inherit"),
+}).meta({
+  ref: "RunbookSessionStartStep",
+})
+
+export const SyncStep = StepBase.extend({
+  kind: z.literal("sync"),
+  targets: z.object({ type: z.literal("roles"), roles: z.array(nonEmpty).min(1) }),
+  ...StepSchedule,
+  needs: z.array(nonEmpty).default([]),
+  include_untracked: z.boolean().default(false),
+  approval: StepApproval.default("inherit"),
+}).meta({
+  ref: "RunbookSyncStep",
+})
+
+export const JobStartStep = StepBase.extend({
+  kind: z.literal("job_start"),
+  targets: z.object({ type: z.literal("roles"), roles: z.array(nonEmpty).min(1) }),
+  ...StepSchedule,
+  needs: z.array(nonEmpty).default([]),
+  command: nonEmpty,
+  cwd: z.string().optional(),
+  approval: StepApproval.default("inherit"),
+}).meta({
+  ref: "RunbookJobStartStep",
+})
+
+export const JobWaitStep = StepBase.extend({
+  kind: z.literal("job_wait"),
+  targets: z.object({ type: z.literal("roles"), roles: z.array(nonEmpty).min(1) }),
+  ...StepSchedule,
+  needs: z.array(nonEmpty).default([]),
+  timeout_ms: z.number().int().positive().optional(),
+  approval: StepApproval.default("inherit"),
+}).meta({
+  ref: "RunbookJobWaitStep",
+})
+
+export const JobLogsStep = StepBase.extend({
+  kind: z.literal("job_logs"),
+  targets: z.object({ type: z.literal("roles"), roles: z.array(nonEmpty).min(1) }),
+  ...StepSchedule,
+  needs: z.array(nonEmpty).default([]),
+  tail: z.number().int().positive().optional(),
+  approval: StepApproval.default("inherit"),
+}).meta({
+  ref: "RunbookJobLogsStep",
+})
+
+export const JobCancelStep = StepBase.extend({
+  kind: z.literal("job_cancel"),
+  targets: z.object({ type: z.literal("roles"), roles: z.array(nonEmpty).min(1) }),
+  ...StepSchedule,
+  needs: z.array(nonEmpty).default([]),
+  approval: StepApproval.default("inherit"),
+}).meta({
+  ref: "RunbookJobCancelStep",
+})
+
 export const Step = z
-  .discriminatedUnion("kind", [QuestionStep, ExecStep, UploadStep, DownloadStep, WorkspaceStep])
+  .discriminatedUnion("kind", [
+    QuestionStep,
+    ExecStep,
+    UploadStep,
+    DownloadStep,
+    WorkspaceStep,
+    SessionStartStep,
+    SyncStep,
+    JobStartStep,
+    JobWaitStep,
+    JobLogsStep,
+    JobCancelStep,
+  ])
   .superRefine((input, ctx) => {
     if (input.kind !== "exec") return
     if (input.intent === "write" && input.targets.type !== "roles") {
@@ -269,6 +364,31 @@ export const Run = z
     stepIdx: z.number().int(),
     bindings: z.record(z.string(), z.array(z.string())).default({}),
     facts: z.record(z.string(), z.string()).default({}),
+    handles: z
+      .object({
+        vm_sessions: z.record(z.string(), z.string()).default({}),
+        vm_jobs: z.record(z.string(), z.string()).default({}),
+        syncs: z
+          .record(
+            z.string(),
+            z.object({
+              vmSessionID: z.string(),
+              vmID: z.string(),
+              hash: z.string(),
+              uploaded: z.number().int(),
+              deleted: z.number().int(),
+              skipped: z.number().int(),
+              files: z.array(z.string()),
+              time: z.number(),
+            }),
+          )
+          .default({}),
+      })
+      .default({
+        vm_sessions: {},
+        vm_jobs: {},
+        syncs: {},
+      }),
     approval: z
       .object({
         confirmed: z.boolean().optional(),
@@ -296,7 +416,7 @@ export const StepRecord = z
     sessionID: z.string(),
     stepID: z.string(),
     stepIdx: z.number().int(),
-    kind: z.enum(["question", "exec", "upload", "download", "workspace_prepare"]),
+    kind: z.enum(["question", "exec", "upload", "download", "workspace_prepare", "session_start", "sync", "job_start", "job_wait", "job_logs", "job_cancel"]),
     title: z.string(),
     attempt: z.number().int(),
     status: StepStatus,
