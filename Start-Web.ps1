@@ -10,8 +10,8 @@ Set-Location $dir
 
 $bun = @(
   (Get-Command bun -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -ErrorAction SilentlyContinue),
-  $(if ($env:BUN_INSTALL) { Join-Path $env:BUN_INSTALL "bin\\bun.exe" }),
-  $(if ($env:USERPROFILE) { Join-Path $env:USERPROFILE ".bun\\bin\\bun.exe" })
+  $(if ($env:BUN_INSTALL) { Join-Path $env:BUN_INSTALL "bin\bun.exe" }),
+  $(if ($env:USERPROFILE) { Join-Path $env:USERPROFILE ".bun\bin\bun.exe" })
 ) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
 
 if (-not $bun) {
@@ -22,7 +22,7 @@ if (-not $bun) {
 }
 
 $mod = Join-Path $dir "node_modules"
-if (-not (Test-Path $mod)) {
+if ($Rebuild -or -not (Test-Path $mod)) {
   Write-Host "Installing dependencies..." -ForegroundColor Cyan
   & $bun --use-system-ca install
   if ($LASTEXITCODE -ne 0) {
@@ -31,23 +31,34 @@ if (-not (Test-Path $mod)) {
   }
 }
 
-$dist = Join-Path $dir "packages\\app\\dist\\index.html"
-if ($Rebuild -or -not (Test-Path $dist)) {
-  Write-Host "Building web app..." -ForegroundColor Cyan
-  & $bun --use-system-ca run --cwd packages/app build
-  if ($LASTEXITCODE -ne 0) {
-    Write-Host "Web build failed." -ForegroundColor Red
-    exit $LASTEXITCODE
-  }
+function Listen($port) {
+  return @(Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue).Count -gt 0
 }
 
-$arg = @("--use-system-ca", "run", "--cwd", "packages/opencode", "src/index.ts", "web")
+$api = 4096
+$web = 4444
+$back = @("--use-system-ca", "run", "--cwd", "packages/opencode", "--conditions=browser", "./src/index.ts", "serve", "--port", "$api")
+$front = @("--cwd", "packages/app", "dev", "--", "--port", "$web")
+$jobs = @()
 
-Write-Host "Starting OpenCode Web..." -ForegroundColor Green
-
-if ($Wait) {
-  & $bun @arg
-  exit $LASTEXITCODE
+if (Listen $api) {
+  Write-Host "Backend already listening on http://localhost:$api" -ForegroundColor Yellow
+} else {
+  Write-Host "Starting backend on http://localhost:$api..." -ForegroundColor Green
+  $jobs += Start-Process -FilePath $bun -ArgumentList $back -WorkingDirectory $dir -PassThru
 }
 
-Start-Process -FilePath $bun -ArgumentList $arg -WorkingDirectory $dir
+if (Listen $web) {
+  Write-Host "App already listening on http://localhost:$web" -ForegroundColor Yellow
+} else {
+  Write-Host "Starting app dev server on http://localhost:$web..." -ForegroundColor Green
+  $jobs += Start-Process -FilePath $bun -ArgumentList $front -WorkingDirectory $dir -PassThru
+}
+
+Write-Host "Opening http://localhost:$web" -ForegroundColor Cyan
+Start-Sleep -Seconds 2
+Start-Process "http://localhost:$web"
+
+if ($Wait -and $jobs.Count -gt 0) {
+  Wait-Process -Id $jobs.Id
+}

@@ -4,21 +4,27 @@ import { Instance } from "../project/instance"
 
 import PROMPT_QWEN from "./prompt/qwen.txt"
 import PROMPT_BEAST from "./prompt/beast.txt"
+import PROMPT_GEMMA from "./prompt/gemma.txt"
 
 import PROMPT_CODEX from "./prompt/codex_header.txt"
 import PROMPT_TRINITY from "./prompt/trinity.txt"
 import type { Provider } from "@/provider/provider"
 
 export namespace SystemPrompt {
+  function lower(model: Provider.Model) {
+    return model.api.id.toLowerCase()
+  }
+
   export function instructions() {
     return PROMPT_CODEX.trim()
   }
 
   export function provider(model: Provider.Model) {
+    if (lower(model).includes("gemma4") || lower(model).includes("gemma-4")) return [PROMPT_GEMMA]
     if (model.api.id.includes("gpt-5")) return [PROMPT_CODEX]
     if (model.api.id.includes("gpt-") || model.api.id.includes("o1") || model.api.id.includes("o3"))
       return [PROMPT_BEAST]
-    if (model.api.id.toLowerCase().includes("trinity")) return [PROMPT_TRINITY]
+    if (lower(model).includes("trinity")) return [PROMPT_TRINITY]
     return [PROMPT_QWEN]
   }
 

@@ -43,6 +43,8 @@ test("execute and runbook-planner prompts forbid guessed docs paths", async () =
   const planner = await Bun.file(path.join(import.meta.dir, "../../src/agent/prompt/runbook-planner.txt")).text()
   expect(execute).toContain("Do not guess documentation URLs.")
   expect(execute).toContain("If a documentation fetch returns 404 or 410")
+  expect(execute).toContain("run vm_preflight first")
+  expect(execute).toContain("same non-retryable blocker class")
   expect(planner).toContain("Do not invent documentation URLs or guess sibling paths.")
   expect(planner).toContain("If a fetched documentation URL returns 404 or 410")
 })

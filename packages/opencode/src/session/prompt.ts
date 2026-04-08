@@ -46,6 +46,7 @@ import { iife } from "@/util/iife"
 import { Shell } from "@/shell/shell"
 import { Truncate } from "@/tool/truncation"
 import { VM } from "@/vm"
+import { SessionReplan } from "./replan"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -62,6 +63,14 @@ const STRUCTURED_OUTPUT_SYSTEM_PROMPT = `IMPORTANT: The user has requested struc
 
 export namespace SessionPrompt {
   const log = Log.create({ service: "session.prompt" })
+
+  export function visible(parts: MessageV2.Part[]) {
+    return parts.some((part) => {
+      if (part.type === "tool") return true
+      if (part.type !== "text") return false
+      return Boolean(part.text.trim())
+    })
+  }
 
   const state = Instance.state(
     () => {
@@ -289,6 +298,8 @@ export namespace SessionPrompt {
     // Note: On session resumption, state is reset but outputFormat is preserved
     // on the user message and will be retrieved from lastUser below
     let structuredOutput: unknown | undefined
+    let replan: Awaited<ReturnType<typeof SessionProcessor.create>>["replan"]
+    let empty = 0
 
     let step = 0
     const session = await Session.get(sessionID)
@@ -664,6 +675,8 @@ export namespace SessionPrompt {
       })
       if (vmText) system.push(vmText)
       const format = lastUser.format ?? { type: "text" }
+      const forced = format.type === "text" ? replan : undefined
+      if (forced) system.push(SessionReplan.prompt(forced))
       if (format.type === "json_schema") {
         system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
       }
@@ -685,10 +698,11 @@ export namespace SessionPrompt {
               ]
             : []),
         ],
-        tools,
+        tools: forced ? {} : tools,
         model,
-        toolChoice: format.type === "json_schema" ? "required" : undefined,
+        toolChoice: format.type === "json_schema" ? "required" : forced ? "none" : undefined,
       })
+      replan = undefined
 
       // If structured output was captured, save it and exit immediately
       // This takes priority because the StructuredOutput tool was called successfully
@@ -699,8 +713,54 @@ export namespace SessionPrompt {
         break
       }
 
+      const parts = await MessageV2.parts(processor.message.id)
+      if (!visible(parts) && !processor.message.error) {
+        if (empty === 0) {
+          empty++
+          const retry: MessageV2.User = {
+            id: Identifier.ascending("message"),
+            sessionID,
+            role: "user",
+            time: {
+              created: Date.now(),
+            },
+            agent: lastUser.agent,
+            model: lastUser.model,
+            variant: lastUser.variant,
+          }
+          await Session.updateMessage(retry)
+          await Session.updatePart({
+            id: Identifier.ascending("part"),
+            messageID: retry.id,
+            sessionID,
+            type: "text",
+            synthetic: true,
+            text: [
+              "<system-reminder>",
+              "Your previous response contained only internal reasoning and no user-visible answer or structured tool call.",
+              "Do not stop after planning.",
+              "If a tool is needed, call it now. Otherwise answer the user directly in plain text.",
+              "</system-reminder>",
+            ].join("\n"),
+          } satisfies MessageV2.TextPart)
+          continue
+        }
+        processor.message.error = new MessageV2.APIError({
+          message: "Model stopped after internal reasoning without producing a visible answer or tool call",
+          isRetryable: false,
+          metadata: {
+            code: "EMPTY_ASSISTANT",
+          },
+        }).toObject()
+        await Session.updateMessage(processor.message)
+        Bus.publish(Session.Event.Error, {
+          sessionID,
+          error: processor.message.error,
+        })
+        break
+      }
+
       if (LLM.qwen(model)) {
-        const parts = await MessageV2.parts(processor.message.id)
         if (LLM.leaked(parts)) {
           processor.message.error = new MessageV2.APIError({
             message: "Model emitted pseudo tool-call text instead of a structured tool call",
@@ -731,6 +791,11 @@ export namespace SessionPrompt {
           await Session.updateMessage(processor.message)
           break
         }
+      }
+
+      if (result === "replan") {
+        replan = processor.replan
+        continue
       }
 
       if (result === "stop") break

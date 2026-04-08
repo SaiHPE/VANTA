@@ -321,6 +321,11 @@ export namespace LLM {
       system.length = 0
       system.push(header, rest.join("\n"))
     }
+    if (system[0]) {
+      system[0] = ProviderTransform.think(input.model, system[0], {
+        tools: Object.keys(input.tools).length > 0 && input.toolChoice !== "none",
+      })
+    }
 
     const variant =
       !input.small && input.model.variants && input.user.variant ? input.model.variants[input.user.variant] : {}

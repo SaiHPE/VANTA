@@ -15,6 +15,17 @@ function mime(mime: string) {
 export namespace ProviderTransform {
   export const OUTPUT_TOKEN_MAX = Flag.OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX || 32_000
 
+  function lower(model: Pick<Provider.Model, "id">) {
+    return model.id.toLowerCase()
+  }
+
+  function sample(model: Pick<Provider.Model, "providerID" | "id">) {
+    if (!gemma4(model)) return {}
+    return {
+      top_k: 64,
+    }
+  }
+
   function unsupported(msgs: ModelMessage[], model: Provider.Model) {
     return msgs.map((msg) => {
       if (msg.role !== "user" || !Array.isArray(msg.content)) return msg
@@ -48,8 +59,32 @@ export namespace ProviderTransform {
     return unsupported(msgs, model)
   }
 
+  export function gemma4(model: Pick<Provider.Model, "providerID" | "id">) {
+    if (model.providerID !== "ollama") return false
+    const id = lower(model)
+    return id.includes("gemma4") || id.includes("gemma-4")
+  }
+
+  export function replay(model: Pick<Provider.Model, "providerID" | "id">) {
+    return !gemma4(model)
+  }
+
+  export function think(
+    model: Pick<Provider.Model, "providerID" | "id">,
+    text: string,
+    opts?: {
+      tools?: boolean
+    },
+  ) {
+    if (!gemma4(model)) return text
+    if (opts?.tools) return text
+    if (text.trimStart().startsWith("<|think|>")) return text
+    return `<|think|>\n${text}`
+  }
+
   export function temperature(model: Provider.Model) {
-    const id = model.id.toLowerCase()
+    if (gemma4(model)) return 1.0
+    const id = lower(model)
     if (id.includes("qwen")) return 0.55
     if (id.includes("gemma")) return 0.7
     if (id.includes("llama")) return 0.7
@@ -58,14 +93,16 @@ export namespace ProviderTransform {
   }
 
   export function topP(model: Provider.Model) {
-    const id = model.id.toLowerCase()
+    if (gemma4(model)) return 0.95
+    const id = lower(model)
     if (id.includes("qwen")) return 0.95
     if (id.includes("gemma")) return 0.9
     return undefined
   }
 
   export function topK(model: Provider.Model) {
-    const id = model.id.toLowerCase()
+    if (gemma4(model)) return undefined
+    const id = lower(model)
     if (id.includes("gemma")) return 40
     return undefined
   }
@@ -75,16 +112,16 @@ export namespace ProviderTransform {
     return {}
   }
 
-  export function options(_input: {
+  export function options(input: {
     model: Provider.Model
     sessionID: string
     providerOptions?: Record<string, any>
   }) {
-    return {}
+    return sample(input.model)
   }
 
-  export function smallOptions(_model: Provider.Model) {
-    return {}
+  export function smallOptions(model: Provider.Model) {
+    return sample(model)
   }
 
   export function providerOptions(model: Provider.Model, options: { [x: string]: any }) {

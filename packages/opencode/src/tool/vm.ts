@@ -4,11 +4,13 @@ import { Tool } from "./tool"
 import { VM, VMRemote } from "@/vm"
 import { VMSSH } from "@/vm/ssh"
 import { VMOperate } from "@/vm/operate"
+import { VMSignal } from "@/vm/signal"
 import { VMWorkspace } from "@/vm/workspace"
 import path from "path"
 import z from "zod"
 
 const Targets = z.union([z.string(), z.array(z.string()).min(1)])
+const ListTargets = z.union([Targets, z.object({}).strict(), z.tuple([])]).optional()
 const SessionIDs = z.union([Identifier.schema("vm_remote_session"), z.array(Identifier.schema("vm_remote_session")).min(1)])
 const JobIDs = z.union([Identifier.schema("vm_job"), z.array(Identifier.schema("vm_job")).min(1)])
 const Shell = z.enum(["auto", "bash", "sh"])
@@ -39,6 +41,37 @@ function listOutput(items: VM.Detail[]) {
 
 function lines(input: string | string[]) {
   return Array.isArray(input) ? input : [input]
+}
+
+function join(items: Array<string | undefined>) {
+  return items.filter(Boolean).join("\n\n")
+}
+
+function target(input: string | string[]) {
+  return Array.isArray(input) ? input.join(",") : input
+}
+
+function list(input: z.infer<typeof ListTargets>) {
+  if (typeof input === "string") return input
+  if (Array.isArray(input) && input.length > 0) return input
+  return
+}
+
+function checks(input: VMSSH.Preflight) {
+  const line = (name: string, item: VMSSH.Check) =>
+    [name, item.status, item.path ?? "", item.detail ?? ""].filter(Boolean).join(" ")
+  return [
+    `shell=${input.shell}`,
+    input.packageManager ? `package_manager=${input.packageManager}` : "package_manager=none",
+    `package_manager_ready=${input.packageManagerReady}`,
+    `disk_kb=${input.diskKb ?? "unknown"}`,
+    line("python3", input.python3),
+    line("dnf", input.dnf),
+    line("yum", input.yum),
+    line("git", input.git),
+    line("bun", input.bun),
+    line("node", input.node),
+  ].join("\n")
 }
 
 async function batch<T>(input: {
@@ -78,14 +111,15 @@ async function confirm(ctx: Tool.Context, targets: string | string[]) {
   })
 }
 
-async function failure(vm: VM.Detail, name: string, err: unknown) {
+async function failure(vm: VM.Detail, name: string, err: unknown, signal?: VMSignal.Info) {
   const text = err instanceof Error ? err.stack ?? err.message : String(err)
-  const info = await VMOperate.capture(text)
+  const info = await VMOperate.capture(join([signal ? VMSignal.lines(signal) : "", text]))
   return {
     summary: err instanceof Error ? err.message : String(err),
     output: info.output,
     transcriptPath: info.transcriptPath,
     artifacts: VMOperate.inline(vm, name, text),
+    signal,
     ran: false,
   } satisfies VMOperate.Done
 }
@@ -116,12 +150,13 @@ async function run<T>(input: {
 }
 
 export const VMListTool = Tool.define("vm_list", {
-  description: "List registered VMs or filter them by id, name, hostname, or ip address.",
+  description: "List registered VMs. Omit `targets` to list every VM, or pass a string or non-empty array to filter by id, name, hostname, or ip address.",
   parameters: z.object({
-    targets: Targets.optional(),
+    targets: ListTargets,
   }),
   async execute(input) {
-    const items = input.targets ? (await VM.resolve(input.targets)).items : await VM.resolve().then((item) => item.items)
+    const targets = list(input.targets)
+    const items = targets ? (await VM.resolve(targets)).items : await VM.resolve().then((item) => item.items)
     return {
       title: `Listed ${items.length} VM${items.length === 1 ? "" : "s"}`,
       output: items.length > 0 ? listOutput(items) : "No VMs are registered in this project.",
@@ -179,6 +214,63 @@ export const VMTestTool = Tool.define("vm_test", {
   },
 })
 
+export const VMPreflightTool = Tool.define("vm_preflight", {
+  description: "Check whether a Linux VM is ready for installs, repo work, and remote opencode execution before making changes.",
+  parameters: z.object({
+    targets: Targets,
+    mode: Mode.default("serial"),
+    concurrency: Concurrency,
+  }),
+  async execute(input, ctx) {
+    return run({
+      ctx,
+      tool: "vm_preflight",
+      targets: input.targets,
+      title: "Checking VM prerequisites",
+      mode: input.mode,
+      concurrency: input.concurrency,
+      async work(vm, push) {
+        const conn = await VM.connect({
+          sessionID: ctx.sessionID,
+          vm,
+          abort: ctx.abort,
+        })
+        const value = await VMSSH.preflight(conn.client)
+        push(checks(value))
+        return value
+      },
+      async done(_vm, value) {
+        const signal = VMSignal.preflight({
+          target: target(input.targets),
+          python3: value.python3,
+          dnf: value.dnf,
+          yum: value.yum,
+        })
+        const info = await VMOperate.capture(join([VMSignal.lines(signal), checks(value)]))
+        return {
+          summary: value.packageManagerReady ? "preflight ok" : "preflight blocked",
+          output: info.output,
+          transcriptPath: info.transcriptPath,
+          signal,
+          ran: true,
+        }
+      },
+      fail(vm, err) {
+        return failure(
+          vm,
+          "preflight-error",
+          err,
+          VMSignal.err({
+            tool: "vm_preflight",
+            args: { targets: input.targets },
+            error: err instanceof Error ? err.stack ?? err.message : String(err),
+          }),
+        )
+      },
+    })
+  },
+})
+
 export const VMExecTool = Tool.define("vm_exec", {
   description: "Run a shell command on one or more registered Linux VMs over SSH.",
   parameters: z.object({
@@ -217,17 +309,44 @@ export const VMExecTool = Tool.define("vm_exec", {
         })
       },
       async done(_vm, value) {
-        const info = await VMOperate.capture(VMOperate.body(value.stdout, value.stderr))
+        const signal = VMSignal.exec({
+          command: input.command,
+          stdout: value.stdout,
+          stderr: value.stderr,
+          code: value.code,
+          timedOut: value.timedOut,
+          target: target(input.targets),
+        })
+        const info = await VMOperate.capture(join([VMSignal.lines(signal), VMOperate.body(value.stdout, value.stderr)]))
         return {
-          summary: [`exit=${value.code ?? "unknown"}`, value.timedOut ? "timed out" : "completed"].join(" "),
+          summary: [
+            `exit=${value.code ?? "unknown"}`,
+            value.timedOut ? "timed out" : "completed",
+            signal.failureClass ? `failure=${signal.failureClass}` : "",
+          ]
+            .filter(Boolean)
+            .join(" "),
           exitCode: value.code,
           output: info.output,
           transcriptPath: info.transcriptPath,
+          signal,
           ran: true,
         }
       },
       fail(vm, err) {
-        return failure(vm, "exec-error", err)
+        return failure(
+          vm,
+          "exec-error",
+          err,
+          VMSignal.err({
+            tool: "vm_exec",
+            args: {
+              targets: input.targets,
+              command: input.command,
+            },
+            error: err instanceof Error ? err.stack ?? err.message : String(err),
+          }),
+        )
       },
     })
   },
@@ -510,6 +629,13 @@ export const VMSessionTool = Tool.define("vm_session", {
           activity_ids: {},
           artifacts: [],
           output: undefined,
+          vm_signals: undefined,
+          plan_category: undefined,
+          target: undefined,
+          failure_class: undefined,
+          retryable: undefined,
+          needs_escalation: undefined,
+          hint: undefined,
           count: items.length,
         },
       }
@@ -528,6 +654,13 @@ export const VMSessionTool = Tool.define("vm_session", {
         activity_ids: {},
         artifacts: [],
         output: undefined,
+        vm_signals: undefined,
+        plan_category: undefined,
+        target: undefined,
+        failure_class: undefined,
+        retryable: undefined,
+        needs_escalation: undefined,
+        hint: undefined,
         count: items.length,
       },
     }

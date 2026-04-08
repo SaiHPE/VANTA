@@ -10,7 +10,6 @@ import { Dialog } from "@opencode-ai/ui/dialog"
 import { List } from "@opencode-ai/ui/list"
 import { Tooltip } from "@opencode-ai/ui/tooltip"
 import { DialogConnectOllama } from "./dialog-connect-ollama"
-import { DialogManageModels } from "./dialog-manage-models"
 import { ModelTooltip } from "./model-tooltip"
 import { useLanguage } from "@/context/language"
 
@@ -94,11 +93,6 @@ export function ModelSelectorPopover(props: {
   })
   const dialog = useDialog()
 
-  const handleManage = () => {
-    setStore("open", false)
-    dialog.show(() => <DialogManageModels />)
-  }
-
   const handleConnectProvider = () => {
     setStore("open", false)
     dialog.show(() => <DialogConnectOllama />)
@@ -158,16 +152,6 @@ export function ModelSelectorPopover(props: {
                     onClick={handleConnectProvider}
                   />
                 </Tooltip>
-                <Tooltip placement="top" value={language.t("dialog.model.manage")}>
-                  <IconButton
-                    icon="sliders"
-                    variant="ghost"
-                    iconSize="normal"
-                    class="size-6"
-                    aria-label={language.t("dialog.model.manage")}
-                    onClick={handleManage}
-                  />
-                </Tooltip>
               </div>
             }
           />
@@ -196,13 +180,7 @@ export const DialogSelectModel: Component<{ provider?: string }> = (props) => {
       }
     >
       <ModelList provider={props.provider} onSelect={() => dialog.close()} />
-      <Button
-        variant="ghost"
-        class="ml-3 mt-5 mb-6 text-text-base self-start"
-        onClick={() => dialog.show(() => <DialogManageModels />)}
-      >
-        {language.t("dialog.model.manage")}
-      </Button>
+      
     </Dialog>
   )
 }

@@ -55,6 +55,36 @@ const model: Provider.Model = {
   variants: {},
 }
 
+const gemma: Provider.Model = {
+  ...model,
+  id: "gemma4:31b",
+  providerID: "ollama",
+  api: {
+    ...model.api,
+    id: "gemma4:31b",
+  },
+  capabilities: {
+    ...model.capabilities,
+    reasoning: true,
+  },
+  family: "gemma4",
+}
+
+const qwen: Provider.Model = {
+  ...model,
+  id: "qwen3:8b",
+  providerID: "ollama",
+  api: {
+    ...model.api,
+    id: "qwen3:8b",
+  },
+  capabilities: {
+    ...model.capabilities,
+    reasoning: true,
+  },
+  family: "qwen3",
+}
+
 function userInfo(id: string): MessageV2.User {
   return {
     id,
@@ -343,15 +373,16 @@ describe("session.message-v2.toModelMessage", () => {
             type: "tool-result",
             toolCallId: "call-1",
             toolName: "bash",
-            output: {
-              type: "content",
-              value: [
-                { type: "text", text: "ok" },
-                { type: "media", mediaType: "image/png", data: "Zm9v" },
-              ],
-            },
+            output: { type: "text", value: "ok" },
             providerOptions: { openai: { tool: "meta" } },
           },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "Attached image(s) from tool result:" },
+          { type: "file", mediaType: "image/png", data: "data:image/png;base64,Zm9v", filename: undefined },
         ],
       },
     ])
@@ -637,6 +668,75 @@ describe("session.message-v2.toModelMessage", () => {
         content: [
           { type: "reasoning", text: "thinking", providerOptions: undefined },
           { type: "text", text: "partial answer" },
+        ],
+      },
+    ])
+  })
+
+  test("skips reasoning history for ollama gemma4 models", () => {
+    const assistantID = "m-assistant"
+
+    const input: MessageV2.WithParts[] = [
+      {
+        info: assistantInfo(assistantID, "m-parent", undefined, {
+          providerID: "ollama",
+          modelID: "gemma4:31b",
+        }),
+        parts: [
+          {
+            ...basePart(assistantID, "a1"),
+            type: "reasoning",
+            text: "thinking",
+            time: { start: 0 },
+          },
+          {
+            ...basePart(assistantID, "a2"),
+            type: "text",
+            text: "final",
+          },
+        ] as MessageV2.Part[],
+      },
+    ]
+
+    expect(MessageV2.toModelMessages(input, gemma)).toStrictEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "final" }],
+      },
+    ])
+  })
+
+  test("keeps reasoning history for non-gemma ollama models", () => {
+    const assistantID = "m-assistant"
+
+    const input: MessageV2.WithParts[] = [
+      {
+        info: assistantInfo(assistantID, "m-parent", undefined, {
+          providerID: "ollama",
+          modelID: "qwen3:8b",
+        }),
+        parts: [
+          {
+            ...basePart(assistantID, "a1"),
+            type: "reasoning",
+            text: "thinking",
+            time: { start: 0 },
+          },
+          {
+            ...basePart(assistantID, "a2"),
+            type: "text",
+            text: "final",
+          },
+        ] as MessageV2.Part[],
+      },
+    ]
+
+    expect(MessageV2.toModelMessages(input, qwen)).toStrictEqual([
+      {
+        role: "assistant",
+        content: [
+          { type: "reasoning", text: "thinking", providerOptions: undefined },
+          { type: "text", text: "final" },
         ],
       },
     ])

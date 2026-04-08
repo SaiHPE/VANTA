@@ -657,7 +657,7 @@ export namespace MessageV2 {
                 ...(differentModel ? {} : { callProviderMetadata: part.metadata }),
               })
           }
-          if (part.type === "reasoning") {
+          if (part.type === "reasoning" && ProviderTransform.replay(model)) {
             assistantMessage.parts.push({
               type: "reasoning",
               text: part.text,

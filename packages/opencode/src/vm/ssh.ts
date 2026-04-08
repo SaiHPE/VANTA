@@ -41,6 +41,25 @@ export namespace VMSSH {
     repoUrl: string
   }
 
+  export type Check = {
+    status: "ok" | "missing" | "broken"
+    path?: string
+    detail?: string
+  }
+
+  export type Preflight = {
+    shell: "bash" | "sh"
+    diskKb?: number
+    packageManager?: "dnf" | "yum"
+    packageManagerReady: boolean
+    python3: Check
+    dnf: Check
+    yum: Check
+    git: Check
+    bun: Check
+    node: Check
+  }
+
   function cfg(input: Auth, host: string): ConnectConfig {
     return {
       host,
@@ -92,6 +111,20 @@ export namespace VMSSH {
         })
         .filter(([key]) => key),
     )
+  }
+
+  function check(text: string) {
+    const [status = "missing", path = "", ...rest] = text.split("|")
+    if (status === "ok" || status === "missing" || status === "broken") {
+      return {
+        status,
+        path: path || undefined,
+        detail: rest.join("|").trim() || undefined,
+      } satisfies Check
+    }
+    return {
+      status: "missing",
+    } satisfies Check
   }
 
   export async function connect(input: {
@@ -307,6 +340,70 @@ export namespace VMSSH {
       arch: arch.trim() || undefined,
       shell: shell.trim() || undefined,
       homeDir: homeDir.trim() || undefined,
+    }
+  }
+
+  export async function preflight(client: Client): Promise<Preflight> {
+    const result = await VMSSH.exec({
+      client,
+      command: [
+        "probe() {",
+        "  name=\"$1\"",
+        "  if ! path=\"$(command -v \"$name\" 2>/dev/null)\"; then",
+        "    printf 'CHECK|%s|missing||\\n' \"$name\"",
+        "    return",
+        "  fi",
+        "  out=\"$($name --version 2>&1 | head -n 1 | tr '\\t' ' ')\"",
+        "  code=$?",
+        "  if [ \"$code\" -eq 0 ]; then",
+        "    printf 'CHECK|%s|ok|%s|%s\\n' \"$name\" \"$path\" \"$out\"",
+        "    return",
+        "  fi",
+        "  printf 'CHECK|%s|broken|%s|%s\\n' \"$name\" \"$path\" \"$out\"",
+        "}",
+        "printf 'DATA|shell|%s\\n' \"$(command -v bash >/dev/null 2>&1 && printf bash || printf sh)\"",
+        "printf 'DATA|disk_kb|%s\\n' \"$(df -Pk \"${HOME:-/}\" 2>/dev/null | awk 'NR==2 {print $4}')\"",
+        "probe python3",
+        "probe dnf",
+        "probe yum",
+        "probe git",
+        "probe bun",
+        "probe node",
+      ].join("\n"),
+      shell: "sh",
+      timeout: 20_000,
+    })
+    const checks = {} as Record<string, Check>
+    let shell: "bash" | "sh" = "sh"
+    let diskKb: number | undefined
+    for (const line of result.stdout.split(/\r?\n/).map((item) => item.trim()).filter(Boolean)) {
+      if (line.startsWith("DATA|shell|")) {
+        shell = line.endsWith("|bash") ? "bash" : "sh"
+        continue
+      }
+      if (line.startsWith("DATA|disk_kb|")) {
+        const raw = line.slice("DATA|disk_kb|".length).trim()
+        const value = Number.parseInt(raw, 10)
+        if (Number.isFinite(value)) diskKb = value
+        continue
+      }
+      if (!line.startsWith("CHECK|")) continue
+      const [_, name = "", ...rest] = line.split("|")
+      checks[name] = check(rest.join("|"))
+    }
+    const dnf = checks.dnf ?? { status: "missing" }
+    const yum = checks.yum ?? { status: "missing" }
+    return {
+      shell,
+      diskKb,
+      packageManager: dnf.status !== "missing" ? "dnf" : yum.status !== "missing" ? "yum" : undefined,
+      packageManagerReady: dnf.status === "ok" || yum.status === "ok",
+      python3: checks.python3 ?? { status: "missing" },
+      dnf,
+      yum,
+      git: checks.git ?? { status: "missing" },
+      bun: checks.bun ?? { status: "missing" },
+      node: checks.node ?? { status: "missing" },
     }
   }
 

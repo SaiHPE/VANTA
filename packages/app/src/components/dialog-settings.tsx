@@ -8,7 +8,6 @@ import { SettingsGeneral } from "./settings-general"
 import { SettingsKeybinds } from "./settings-keybinds"
 import { SettingsMCP } from "./settings-mcp"
 import { SettingsOllama } from "./settings-ollama"
-import { SettingsModels } from "./settings-models"
 import { SettingsVMs } from "./settings-vms"
 
 export const DialogSettings: Component<{ tab?: string }> = (props) => {
@@ -43,10 +42,6 @@ export const DialogSettings: Component<{ tab?: string }> = (props) => {
                       <Icon name="providers" />
                       Ollama
                     </Tabs.Trigger>
-                    <Tabs.Trigger value="models">
-                      <Icon name="models" />
-                      {language.t("settings.models.title")}
-                    </Tabs.Trigger>
                     <Tabs.Trigger value="mcp">
                       <Icon name="mcp" />
                       MCP
@@ -73,9 +68,6 @@ export const DialogSettings: Component<{ tab?: string }> = (props) => {
         </Tabs.Content>
         <Tabs.Content value="ollama" class="no-scrollbar">
           <SettingsOllama />
-        </Tabs.Content>
-        <Tabs.Content value="models" class="no-scrollbar">
-          <SettingsModels />
         </Tabs.Content>
         <Tabs.Content value="mcp" class="no-scrollbar">
           <SettingsMCP />

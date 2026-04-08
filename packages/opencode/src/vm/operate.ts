@@ -2,6 +2,7 @@ import { type MessageV2 } from "@/session/message-v2"
 import { Truncate } from "@/tool/truncation"
 import { VM } from "@/vm"
 import { VMWorkspace } from "./workspace"
+import { VMSignal } from "./signal"
 
 const MAX = 30_000
 const TAIL = 10_000
@@ -20,6 +21,13 @@ export namespace VMOperate {
     output?: string
     activity_ids: Record<string, string>
     artifacts?: VM.Artifact[]
+    vm_signals?: Record<string, VMSignal.Info>
+    plan_category?: string
+    target?: string
+    failure_class?: string
+    retryable?: boolean
+    needs_escalation?: boolean
+    hint?: string
   }
 
   export type Done = {
@@ -28,6 +36,7 @@ export namespace VMOperate {
     output?: string
     transcriptPath?: string
     artifacts?: VM.Artifact[]
+    signal?: VMSignal.Info
     ran: boolean
   }
 
@@ -40,6 +49,7 @@ export namespace VMOperate {
     output?: string
     transcriptPath?: string
     artifacts?: VM.Artifact[]
+    signal?: VMSignal.Info
     value?: T
     error?: unknown
   }
@@ -200,6 +210,7 @@ export namespace VMOperate {
             output: done.output,
             transcriptPath: done.transcriptPath,
             artifacts: done.artifacts,
+            signal: done.signal,
             value,
           }
         })
@@ -230,6 +241,7 @@ export namespace VMOperate {
             output: done.output,
             transcriptPath: done.transcriptPath,
             artifacts: done.artifacts,
+            signal: done.signal,
             error: err,
           }
         })
@@ -244,6 +256,8 @@ export namespace VMOperate {
           )
 
     const artifacts = state.artifacts ?? []
+    const vmSignals = Object.fromEntries(items.flatMap((item) => (item.signal ? [[item.vm.id, item.signal]] : [])))
+    const one = VMSignal.common(Object.values(vmSignals))
     return {
       title: input.title,
       output: join(
@@ -258,6 +272,13 @@ export namespace VMOperate {
         activity_ids: state.activity_ids,
         artifacts,
         output: state.output,
+        vm_signals: Object.keys(vmSignals).length > 0 ? vmSignals : undefined,
+        plan_category: one?.category,
+        target: one?.target,
+        failure_class: one?.failureClass,
+        retryable: one?.retryable,
+        needs_escalation: one?.needsEscalation,
+        hint: one?.hint,
       },
       attachments: artifacts.length ? artifacts.map(attach) : undefined,
       results: items,

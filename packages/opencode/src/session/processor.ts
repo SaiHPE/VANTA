@@ -15,9 +15,9 @@ import { Config } from "@/config/config"
 import { SessionCompaction } from "./compaction"
 import { PermissionNext } from "@/permission/next"
 import { Question } from "@/question"
+import { SessionDoom } from "./doom"
 
 export namespace SessionProcessor {
-  const DOOM_LOOP_THRESHOLD = 3
   const log = Log.create({ service: "session.processor" })
 
   export type Info = Awaited<ReturnType<typeof create>>
@@ -29,15 +29,20 @@ export namespace SessionProcessor {
     model: Provider.Model
     abort: AbortSignal
   }) {
+    class ReplanError extends Error {}
     const toolcalls: Record<string, MessageV2.ToolPart> = {}
     let snapshot: string | undefined
     let blocked = false
     let attempt = 0
     let needsCompaction = false
+    let replan: SessionDoom.Hit | undefined
 
     const result = {
       get message() {
         return input.assistantMessage
+      },
+      get replan() {
+        return replan
       },
       partFromToolCall(toolCallID: string) {
         return toolcalls[toolCallID]
@@ -149,27 +154,18 @@ export namespace SessionProcessor {
                     toolcalls[value.toolCallId] = part as MessageV2.ToolPart
 
                     const parts = await MessageV2.parts(input.assistantMessage.id)
-                    const lastThree = parts.slice(-DOOM_LOOP_THRESHOLD)
-
-                    if (
-                      lastThree.length === DOOM_LOOP_THRESHOLD &&
-                      lastThree.every(
-                        (p) =>
-                          p.type === "tool" &&
-                          p.tool === value.toolName &&
-                          p.state.status !== "pending" &&
-                          JSON.stringify(p.state.input) === JSON.stringify(value.input),
-                      )
-                    ) {
+                    const hit = SessionDoom.trip(parts, value.toolName, value.input)
+                    if (hit) {
+                      if (hit.mode === "semantic") {
+                        replan = hit
+                        throw new ReplanError("Repeated failed strategies require a replan")
+                      }
                       const agent = await Agent.get(input.assistantMessage.agent)
                       await PermissionNext.ask({
                         permission: "doom_loop",
                         patterns: [value.toolName],
                         sessionID: input.assistantMessage.sessionID,
-                        metadata: {
-                          tool: value.toolName,
-                          input: value.input,
-                        },
+                        metadata: hit,
                         always: [value.toolName],
                         ruleset: agent.permission,
                       })
@@ -351,37 +347,47 @@ export namespace SessionProcessor {
               if (needsCompaction) break
             }
           } catch (e: any) {
-            log.error("process", {
-              error: e,
-              stack: JSON.stringify(e.stack),
-            })
-            const error = MessageV2.fromError(e, { providerID: input.model.providerID })
-            if (MessageV2.ContextOverflowError.isInstance(error)) {
-              needsCompaction = true
-              Bus.publish(Session.Event.Error, {
+            if (e instanceof ReplanError) {
+              log.info("forcing replan", {
                 sessionID: input.sessionID,
-                error,
+                tool: replan?.tool,
+                category: replan?.category,
+                target: replan?.target,
+                failures: replan?.failures,
               })
             } else {
-              const retry = SessionRetry.retryable(error)
-              if (retry !== undefined) {
-                attempt++
-                const delay = SessionRetry.delay(attempt, error.name === "APIError" ? error : undefined)
-                SessionStatus.set(input.sessionID, {
-                  type: "retry",
-                  attempt,
-                  message: retry,
-                  next: Date.now() + delay,
-                })
-                await SessionRetry.sleep(delay, input.abort).catch(() => {})
-                continue
-              }
-              input.assistantMessage.error = error
-              Bus.publish(Session.Event.Error, {
-                sessionID: input.assistantMessage.sessionID,
-                error: input.assistantMessage.error,
+              log.error("process", {
+                error: e,
+                stack: JSON.stringify(e.stack),
               })
-              SessionStatus.set(input.sessionID, { type: "idle" })
+              const error = MessageV2.fromError(e, { providerID: input.model.providerID })
+              if (MessageV2.ContextOverflowError.isInstance(error)) {
+                needsCompaction = true
+                Bus.publish(Session.Event.Error, {
+                  sessionID: input.sessionID,
+                  error,
+                })
+              } else {
+                const retry = SessionRetry.retryable(error)
+                if (retry !== undefined) {
+                  attempt++
+                  const delay = SessionRetry.delay(attempt, error.name === "APIError" ? error : undefined)
+                  SessionStatus.set(input.sessionID, {
+                    type: "retry",
+                    attempt,
+                    message: retry,
+                    next: Date.now() + delay,
+                  })
+                  await SessionRetry.sleep(delay, input.abort).catch(() => {})
+                  continue
+                }
+                input.assistantMessage.error = error
+                Bus.publish(Session.Event.Error, {
+                  sessionID: input.assistantMessage.sessionID,
+                  error: input.assistantMessage.error,
+                })
+                SessionStatus.set(input.sessionID, { type: "idle" })
+              }
             }
           }
           if (snapshot) {
@@ -406,7 +412,9 @@ export namespace SessionProcessor {
                 state: {
                   ...part.state,
                   status: "error",
-                  error: "Tool execution aborted",
+                  error: replan
+                    ? "Tool execution blocked: replan required after repeated failed strategies in the same category"
+                    : "Tool execution aborted",
                   time: {
                     start: Date.now(),
                     end: Date.now(),
@@ -418,6 +426,7 @@ export namespace SessionProcessor {
           input.assistantMessage.time.completed = Date.now()
           await Session.updateMessage(input.assistantMessage)
           if (needsCompaction) return "compact"
+          if (replan) return "replan"
           if (blocked) return "stop"
           if (input.assistantMessage.error) return "stop"
           return "continue"
