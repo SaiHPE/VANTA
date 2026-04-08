@@ -16,6 +16,7 @@ export namespace PermissionNext {
   export function fromConfig(permission: any): any[] { return [] }
   export function merge(...rulesets: any[]): any[] { return [] }
   export function evaluate(...args: any[]): any { return "allow" }
+  export async function ask(...args: any[]): Promise<void> {}
   export class DeniedError extends Error {
     constructor(...args: any[]) { super("Denied") }
   }

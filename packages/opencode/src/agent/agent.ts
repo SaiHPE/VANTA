@@ -289,7 +289,7 @@ export namespace Agent {
     // Ensure Truncate.GLOB is allowed unless explicitly configured
     for (const name in result) {
       const agent = result[name]
-      const explicit = agent.permission.some((r) => {
+      const explicit = agent.permission.some((r: any) => {
         if (r.permission !== "external_directory") return false
         if (r.action !== "deny") return false
         return r.pattern === Truncate.GLOB
