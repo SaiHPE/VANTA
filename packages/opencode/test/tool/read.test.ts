@@ -74,7 +74,7 @@ describe("tool.read external_directory permission", () => {
         await read.execute({ filePath: path.join(outerTmp.path, "secret.txt") }, testCtx)
         const extDirReq = requests.find((r) => r.permission === "external_directory")
         expect(extDirReq).toBeDefined()
-        expect(extDirReq!.patterns.some((p) => p.includes(outerTmp.path.replaceAll("\\", "/")))).toBe(true)
+        expect(extDirReq!.patterns.some((p: any) => p.includes(outerTmp.path.replaceAll("\\", "/")))).toBe(true)
       },
     })
   })

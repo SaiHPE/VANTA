@@ -238,7 +238,7 @@ describe("tool.bash permissions", () => {
         )
         expect(requests.length).toBe(1)
         expect(requests[0].always.length).toBeGreaterThan(0)
-        expect(requests[0].always.some((p) => p.endsWith("*"))).toBe(true)
+        expect(requests[0].always.some((p: any) => p.endsWith("*"))).toBe(true)
       },
     })
   })
