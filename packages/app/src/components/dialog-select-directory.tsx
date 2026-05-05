@@ -8,8 +8,8 @@ import fuzzysort from "fuzzysort"
 import { createMemo, createResource, createSignal } from "solid-js"
 import { useGlobalSDK } from "@/context/global-sdk"
 import { useGlobalSync } from "@/context/global-sync"
-import { useLayout } from "@/context/layout"
 import { useLanguage } from "@/context/language"
+import { validProject } from "@/context/global-sync/utils"
 
 interface DialogSelectDirectoryProps {
   title?: string
@@ -28,7 +28,8 @@ function cleanInput(value: string) {
   return first.replace(/[\u0000-\u001F\u007F]/g, "").trim()
 }
 
-function normalizePath(input: string) {
+function normalizePath(input: string | undefined) {
+  if (!input) return ""
   const v = input.replaceAll("\\", "/")
   if (v.startsWith("//") && !v.startsWith("///")) return "//" + v.slice(2).replace(/\/+/g, "/")
   return v.replace(/\/+/g, "/")
@@ -248,7 +249,6 @@ function useDirectorySearch(args: {
 export function DialogSelectDirectory(props: DialogSelectDirectoryProps) {
   const sync = useGlobalSync()
   const sdk = useGlobalSDK()
-  const layout = useLayout()
   const dialog = useDialog()
   const language = useLanguage()
 
@@ -279,19 +279,16 @@ export function DialogSelectDirectory(props: DialogSelectDirectoryProps) {
   })
 
   const recentProjects = createMemo(() => {
-    const projects = layout.projects.list()
+    const projects = sync.data.project.filter(validProject)
     const byProject = new Map<string, number>()
 
     for (const project of projects) {
       let at = 0
-      const dirs = [project.worktree, ...(project.sandboxes ?? [])]
-      for (const directory of dirs) {
-        const sessions = sync.child(directory, { bootstrap: false })[0].session
-        for (const session of sessions) {
-          if (session.time.archived) continue
-          const updated = session.time.updated ?? session.time.created
-          if (updated > at) at = updated
-        }
+      const sessions = sync.child(project.worktree, { bootstrap: false })[0].session
+      for (const session of sessions) {
+        if (session.time.archived) continue
+        const updated = session.time.updated ?? session.time.created
+        if (updated > at) at = updated
       }
       byProject.set(project.worktree, at)
     }

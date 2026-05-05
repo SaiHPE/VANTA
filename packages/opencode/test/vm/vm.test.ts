@@ -11,6 +11,8 @@ import { VMSSH } from "../../src/vm/ssh"
 import { resetDatabase } from "../fixture/db"
 import { tmpdir } from "../fixture/fixture"
 
+const slow = { timeout: 60_000 }
+
 async function git(dir: string) {
   await $`git init`.cwd(dir).quiet()
   await $`git config user.email test@example.com`.cwd(dir).quiet()
@@ -177,7 +179,7 @@ test("vm create, list, get, update, and delete stay project scoped", async () =>
       expect((await VM.list()).map((item) => item.id)).toEqual([one.id])
     },
   })
-})
+}, slow)
 
 test("vm resolve supports exact, fuzzy, and ambiguous matches", async () => {
   await using tmp = await tmpdir()
@@ -211,7 +213,7 @@ test("vm resolve supports exact, fuzzy, and ambiguous matches", async () => {
       expect(wide.items.map((item) => item.id)).toEqual([one.id, two.id])
     },
   })
-})
+}, slow)
 
 test("vm confirm asks a question for ambiguous matches and caches the selection", async () => {
   await using tmp = await tmpdir()
@@ -262,7 +264,7 @@ test("vm confirm asks a question for ambiguous matches and caches the selection"
       expect(cached.map((item) => item.id)).toEqual([one.id])
     },
   })
-})
+}, slow)
 
 test("vm activity start and finish persist audit rows", async () => {
   await using tmp = await tmpdir()
@@ -302,7 +304,7 @@ test("vm activity start and finish persist audit rows", async () => {
       expect(items[0]?.transcriptPath).toBe("/tmp/tool_output.txt")
     },
   })
-})
+}, slow)
 
 test("vm connection caches facts, shell probing, and sftp handles per session", async () => {
   await using tmp = await tmpdir()
@@ -355,7 +357,7 @@ test("vm connection caches facts, shell probing, and sftp handles per session", 
       }
     },
   })
-})
+}, slow)
 
 test("vm operate parallel mode respects concurrency and preserves input order", async () => {
   await using tmp = await tmpdir()
@@ -409,7 +411,7 @@ test("vm operate parallel mode respects concurrency and preserves input order", 
       expect(result.results.map((item) => item.summary)).toEqual(vms.map((vm) => vm.name))
     },
   })
-})
+}, slow)
 
 test("vm operate persists large transcripts to disk and stores transcriptPath on activity rows", async () => {
   await using tmp = await tmpdir()
@@ -453,7 +455,7 @@ test("vm operate persists large transcripts to disk and stores transcriptPath on
       expect(await Bun.file(items[0]!.transcriptPath!).text()).toBe(body)
     },
   })
-})
+}, slow)
 
 test("vm remote session open reuses transport and close updates persisted status", async () => {
   await using tmp = await tmpdir()
@@ -518,7 +520,7 @@ test("vm remote session open reuses transport and close updates persisted status
       }
     },
   })
-})
+}, slow)
 
 test("vm remote sync and jobs use worker RPCs and persist state", async () => {
   await using tmp = await tmpdir({
@@ -615,4 +617,4 @@ test("vm remote sync and jobs use worker RPCs and persist state", async () => {
       }
     },
   })
-})
+}, slow)

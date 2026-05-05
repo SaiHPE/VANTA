@@ -8,10 +8,8 @@ import { SessionPrompt } from "../../session/prompt"
 import { SessionCompaction } from "../../session/compaction"
 import { SessionRevert } from "../../session/revert"
 import { SessionStatus } from "@/session/status"
-import { SessionSummary } from "@/session/summary"
 import { Todo } from "../../session/todo"
 import { Agent } from "../../agent/agent"
-import { Snapshot } from "@/snapshot"
 import { Runbook } from "@/runbook"
 import { Log } from "../../util/log"
 import { PermissionNext } from "@/permission/next"
@@ -383,37 +381,6 @@ export const SessionRoutes = lazy(() =>
       },
     )
     .post(
-      "/:sessionID/fork",
-      describeRoute({
-        summary: "Fork session",
-        description: "Create a new session by forking an existing session at a specific message point.",
-        operationId: "session.fork",
-        responses: {
-          200: {
-            description: "200",
-            content: {
-              "application/json": {
-                schema: resolver(Session.Info),
-              },
-            },
-          },
-        },
-      }),
-      validator(
-        "param",
-        z.object({
-          sessionID: Session.fork.schema.shape.sessionID,
-        }),
-      ),
-      validator("json", Session.fork.schema.omit({ sessionID: true })),
-      async (c) => {
-        const sessionID = c.req.valid("param").sessionID
-        const body = c.req.valid("json")
-        const result = await Session.fork({ ...body, sessionID })
-        return c.json(result)
-      },
-    )
-    .post(
       "/:sessionID/abort",
       describeRoute({
         summary: "Abort session",
@@ -440,45 +407,6 @@ export const SessionRoutes = lazy(() =>
       async (c) => {
         SessionPrompt.cancel(c.req.valid("param").sessionID)
         return c.json(true)
-      },
-    )
-    .get(
-      "/:sessionID/diff",
-      describeRoute({
-        summary: "Get message diff",
-        description: "Get the file changes (diff) that resulted from a specific user message in the session.",
-        operationId: "session.diff",
-        responses: {
-          200: {
-            description: "Successfully retrieved diff",
-            content: {
-              "application/json": {
-                schema: resolver(Snapshot.FileDiff.array()),
-              },
-            },
-          },
-        },
-      }),
-      validator(
-        "param",
-        z.object({
-          sessionID: SessionSummary.diff.schema.shape.sessionID,
-        }),
-      ),
-      validator(
-        "query",
-        z.object({
-          messageID: SessionSummary.diff.schema.shape.messageID,
-        }),
-      ),
-      async (c) => {
-        const query = c.req.valid("query")
-        const params = c.req.valid("param")
-        const result = await SessionSummary.diff({
-          sessionID: params.sessionID,
-          messageID: query.messageID,
-        })
-        return c.json(result)
       },
     )
     .post(

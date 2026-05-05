@@ -96,12 +96,23 @@ export namespace Config {
         }
       }
 
-      deps.push(
-        iife(async () => {
-          const shouldInstall = await needsInstall(dir)
-          if (shouldInstall) await installDependencies(dir)
-        }),
-      )
+      const pkg = await Filesystem.exists(path.join(dir, "package.json"))
+      const runtime =
+        pkg ||
+        Glob.scanSync("{plugin,plugins,tool,tools}/*.{js,ts}", {
+          cwd: dir,
+          absolute: false,
+          dot: true,
+          symlink: true,
+        }).length > 0
+      if (runtime) {
+        deps.push(
+          iife(async () => {
+            const shouldInstall = await needsInstall(dir)
+            if (shouldInstall) await installDependencies(dir)
+          }),
+        )
+      }
 
       result.command = mergeDeep(result.command ?? {}, await loadCommand(dir))
       result.agent = mergeDeep(result.agent, await loadAgent(dir))

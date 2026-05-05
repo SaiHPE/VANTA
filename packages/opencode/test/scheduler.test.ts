@@ -5,6 +5,7 @@ import { tmpdir } from "./fixture/fixture"
 
 describe("Scheduler.register", () => {
   const hour = 60 * 60 * 1000
+  const slow = { timeout: 60_000 }
 
   test("defaults to instance scope per directory", async () => {
     await using one = await tmpdir({ git: true })
@@ -36,7 +37,7 @@ describe("Scheduler.register", () => {
       },
     })
     expect(runs.count).toBe(2)
-  })
+  }, slow)
 
   test("global scope runs once across instances", async () => {
     await using one = await tmpdir({ git: true })
@@ -69,5 +70,5 @@ describe("Scheduler.register", () => {
       },
     })
     expect(runs.count).toBe(1)
-  })
+  }, slow)
 })

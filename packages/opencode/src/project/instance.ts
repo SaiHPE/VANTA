@@ -80,6 +80,22 @@ export const Instance = {
       },
     })
   },
+  async disposeDirectory(directory: string) {
+    const value = cache.get(directory)
+    if (!value) return
+    const ctx = await value.catch((error) => {
+      Log.Default.warn("instance dispose failed", { key: directory, error })
+      return undefined
+    })
+    if (!ctx) {
+      if (cache.get(directory) === value) cache.delete(directory)
+      return
+    }
+    if (cache.get(directory) !== value) return
+    await context.provide(ctx, async () => {
+      await Instance.dispose()
+    })
+  },
   async disposeAll() {
     if (disposal.all) return disposal.all
 
@@ -88,22 +104,7 @@ export const Instance = {
       const entries = [...cache.entries()]
       for (const [key, value] of entries) {
         if (cache.get(key) !== value) continue
-
-        const ctx = await value.catch((error) => {
-          Log.Default.warn("instance dispose failed", { key, error })
-          return undefined
-        })
-
-        if (!ctx) {
-          if (cache.get(key) === value) cache.delete(key)
-          continue
-        }
-
-        if (cache.get(key) !== value) continue
-
-        await context.provide(ctx, async () => {
-          await Instance.dispose()
-        })
+        await Instance.disposeDirectory(key)
       }
     }).finally(() => {
       disposal.all = undefined

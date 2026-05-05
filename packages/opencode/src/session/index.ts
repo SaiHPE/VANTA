@@ -183,13 +183,6 @@ export namespace Session {
         info: Info,
       }),
     ),
-    Diff: BusEvent.define(
-      "session.diff",
-      z.object({
-        sessionID: z.string(),
-        diff: Snapshot.FileDiff.array(),
-      }),
-    ),
     Error: BusEvent.define(
       "session.error",
       z.object({

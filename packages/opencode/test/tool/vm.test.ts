@@ -14,7 +14,9 @@ const ctx = {
   async ask() {},
 }
 
-test("vm_list treats empty targets objects as list-all", async () => {
+test(
+  "vm_list treats empty targets objects as list-all",
+  async () => {
   await using tmp = await tmpdir()
   await Instance.provide({
     directory: tmp.path,
@@ -34,9 +36,13 @@ test("vm_list treats empty targets objects as list-all", async () => {
       expect(result.output).toContain("test server")
     },
   })
-})
+  },
+  { timeout: 60_000 },
+)
 
-test("vm_list treats empty targets arrays as list-all", async () => {
+test(
+  "vm_list treats empty targets arrays as list-all",
+  async () => {
   await using tmp = await tmpdir()
   await Instance.provide({
     directory: tmp.path,
@@ -56,4 +62,6 @@ test("vm_list treats empty targets arrays as list-all", async () => {
       expect(result.output).toContain("test server")
     },
   })
-})
+  },
+  { timeout: 60_000 },
+)

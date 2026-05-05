@@ -1,7 +1,6 @@
 import { Binary } from "@opencode-ai/util/binary"
 import { produce, reconcile, type SetStoreFunction, type Store } from "solid-js/store"
 import type {
-  FileDiff,
   Message,
   Part,
   PermissionRequest,
@@ -53,7 +52,6 @@ function cleanupSessionCaches(
   if (!sessionID) return
   const hasAny =
     store.message[sessionID] !== undefined ||
-    store.session_diff[sessionID] !== undefined ||
     store.todo[sessionID] !== undefined ||
     store.runbook[sessionID] !== undefined ||
     store.permission[sessionID] !== undefined ||
@@ -71,13 +69,12 @@ function cleanupSessionCaches(
           delete draft.part[id]
         }
       }
-      delete draft.message[sessionID]
-      delete draft.session_diff[sessionID]
-      delete draft.todo[sessionID]
-      delete draft.runbook[sessionID]
-      delete draft.permission[sessionID]
-      delete draft.question[sessionID]
-      delete draft.session_status[sessionID]
+      if (draft.message) delete draft.message[sessionID]
+      if (draft.todo) delete draft.todo[sessionID]
+      if (draft.runbook) delete draft.runbook[sessionID]
+      if (draft.permission) delete draft.permission[sessionID]
+      if (draft.question) delete draft.question[sessionID]
+      if (draft.session_status) delete draft.session_status[sessionID]
     }),
   )
 }
@@ -153,11 +150,6 @@ export function applyDirectoryEvent(input: {
       cleanupSessionCaches(input.store, input.setStore, info.id, input.setSessionTodo)
       if (info.parentID) break
       input.setStore("sessionTotal", (value) => Math.max(0, value - 1))
-      break
-    }
-    case "session.diff": {
-      const props = event.properties as { sessionID: string; diff: FileDiff[] }
-      input.setStore("session_diff", props.sessionID, reconcile(props.diff, { key: "file" }))
       break
     }
     case "todo.updated": {

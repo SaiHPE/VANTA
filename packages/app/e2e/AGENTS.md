@@ -69,15 +69,12 @@ test("test description", async ({ page, sdk, gotoSession }) => {
 - `openPalette(page)` - Open command palette
 - `openSettings(page)` - Open settings dialog
 - `closeDialog(page, dialog)` - Close any dialog
-- `openSidebar(page)` / `closeSidebar(page)` - Toggle sidebar
 - `withSession(sdk, title, callback)` - Create temp session
 - `clickListItem(container, filter)` - Click list item by key/text
 
 **Selectors** (`selectors.ts`):
 
 - `promptSelector` - Prompt input
-- `terminalSelector` - Terminal panel
-- `sessionItemSelector(id)` - Session in sidebar
 - `listItemSelector` - Generic list items
 
 **Utils** (`utils.ts`):
@@ -152,7 +149,6 @@ Use `modKey` for cross-platform compatibility:
 ```typescript
 import { modKey } from "../utils"
 
-await page.keyboard.press(`${modKey}+B`) // Toggle sidebar
 await page.keyboard.press(`${modKey}+Comma`) // Open settings
 ```
 

@@ -797,6 +797,13 @@ export namespace MessageV2 {
     return result
   }
 
+  function retryable(e: APICallError, providerID: string) {
+    if (!providerID.startsWith("openai")) return e.isRetryable
+    const status = e.statusCode
+    if (!status) return e.isRetryable
+    return status === 404 || e.isRetryable
+  }
+
   export function fromError(e: unknown, ctx: { providerID: string }) {
     switch (true) {
       case e instanceof DOMException && e.name === "AbortError":
@@ -840,7 +847,7 @@ export namespace MessageV2 {
           {
             message: parsed.message,
             statusCode: parsed.statusCode,
-            isRetryable: parsed.isRetryable,
+            isRetryable: retryable(e, ctx.providerID),
             responseHeaders: parsed.responseHeaders,
             responseBody: parsed.responseBody,
             metadata: parsed.metadata,

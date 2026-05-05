@@ -31,7 +31,7 @@ import { estimateRootSessionTotal, loadRootSessionsWithFallback } from "./global
 import { trimSessions } from "./global-sync/session-trim"
 import type { ProjectMeta, RootLoadResult, State } from "./global-sync/types"
 import { SESSION_RECENT_LIMIT } from "./global-sync/types"
-import { sanitizeProject } from "./global-sync/utils"
+import { normalizeProjects } from "./global-sync/utils"
 import { formatServerError } from "@/utils/server-errors"
 import { createSdkForServer } from "@/utils/server"
 
@@ -66,10 +66,12 @@ function createGlobalSync() {
     createStore({ value: [] as Project[] }),
   )
 
+  const cachedProjects = () => normalizeProjects(projectCache.value)
+
   const [globalStore, setGlobalStore] = createStore<GlobalStore>({
     ready: false,
     path: { state: "", config: "", worktree: "", directory: "", home: "" },
-    project: projectCache.value,
+    project: cachedProjects(),
     session_todo: {},
     provider: { all: [], connected: [], default: {} },
     config: {},
@@ -86,7 +88,7 @@ function createGlobalSync() {
   const cacheProjects = () => {
     setProjectCache(
       "value",
-      untrack(() => globalStore.project.map(sanitizeProject)),
+      untrack(() => normalizeProjects(globalStore.project)),
     )
   }
 
@@ -121,7 +123,7 @@ function createGlobalSync() {
     void projectInit.then(() => {
       if (!active) return
       if (projectWritten) return
-      const cached = projectCache.value
+      const cached = cachedProjects()
       if (cached.length === 0) return
       setGlobalStore("project", cached)
     })

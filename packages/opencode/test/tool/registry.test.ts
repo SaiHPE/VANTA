@@ -1,8 +1,9 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, spyOn, test } from "bun:test"
 import path from "path"
 import fs from "fs/promises"
 import { tmpdir } from "../fixture/fixture"
 import { Instance } from "../../src/project/instance"
+import { PackageRegistry } from "../../src/bun/registry"
 import { ToolRegistry } from "../../src/tool/registry"
 
 describe("tool.registry", () => {
@@ -93,6 +94,34 @@ describe("tool.registry", () => {
             },
           }),
         )
+        await fs.mkdir(path.join(root, "node_modules", "@opencode-ai", "plugin"), { recursive: true })
+        await Bun.write(
+          path.join(root, "node_modules", "@opencode-ai", "plugin", "package.json"),
+          JSON.stringify({
+            name: "@opencode-ai/plugin",
+            version: "0.0.0-test",
+            type: "module",
+          }),
+        )
+        await fs.mkdir(path.join(root, "node_modules", "cowsay"), { recursive: true })
+        await Bun.write(
+          path.join(root, "node_modules", "cowsay", "package.json"),
+          JSON.stringify({
+            name: "cowsay",
+            version: "1.6.0",
+            type: "module",
+            exports: "./index.js",
+          }),
+        )
+        await Bun.write(
+          path.join(root, "node_modules", "cowsay", "index.js"),
+          [
+            "export function say({ text }) {",
+            "  return `moo ${text}`",
+            "}",
+            "",
+          ].join("\n"),
+        )
 
         await Bun.write(
           path.join(dirpath, "cowsay.ts"),
@@ -111,14 +140,20 @@ describe("tool.registry", () => {
       },
     })
 
-    await Instance.provide({
-      directory: tmp.path,
-      fn: async () => {
-        const ids = await ToolRegistry.ids()
-        expect(ids).toContain("cowsay")
-      },
-    })
-  })
+    const outdated = spyOn(PackageRegistry, "isOutdated").mockResolvedValue(false)
+
+    try {
+      await Instance.provide({
+        directory: tmp.path,
+        fn: async () => {
+          const ids = await ToolRegistry.ids()
+          expect(ids).toContain("cowsay")
+        },
+      })
+    } finally {
+      outdated.mockRestore()
+    }
+  }, { timeout: 60_000 })
 
   test("websearch is available for ollama models", async () => {
     await using tmp = await tmpdir()

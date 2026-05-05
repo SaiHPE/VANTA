@@ -2,6 +2,7 @@ import { $ } from "bun"
 import * as fs from "fs/promises"
 import os from "os"
 import path from "path"
+import { Instance } from "../../src/project/instance"
 import type { Config } from "../../src/config/config"
 
 // Strip null bytes from paths (defensive fix for CI environment issues)
@@ -27,6 +28,7 @@ function clean(dir: string) {
 
 async function stop(dir: string) {
   if (!(await exists(dir))) return
+  if (process.platform === "win32") return
   await $`git fsmonitor--daemon stop`.cwd(dir).quiet().nothrow()
 }
 
@@ -41,6 +43,9 @@ export async function tmpdir<T>(options?: TmpDirOptions<T>) {
   await fs.mkdir(dirpath, { recursive: true })
   if (options?.git) {
     await $`git init`.cwd(dirpath).quiet()
+    await $`git config user.email test@example.com`.cwd(dirpath).quiet()
+    await $`git config user.name opencode-test`.cwd(dirpath).quiet()
+    await $`git config commit.gpgsign false`.cwd(dirpath).quiet().nothrow()
     await $`git config core.fsmonitor false`.cwd(dirpath).quiet()
     await $`git commit --allow-empty -m "root commit ${dirpath}"`.cwd(dirpath).quiet()
   }
@@ -60,6 +65,7 @@ export async function tmpdir<T>(options?: TmpDirOptions<T>) {
       try {
         await options?.dispose?.(realpath)
       } finally {
+        await Instance.disposeDirectory(realpath).catch(() => undefined)
         if (options?.git) await stop(realpath).catch(() => undefined)
         await clean(realpath).catch(() => undefined)
       }

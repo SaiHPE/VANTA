@@ -1,5 +1,6 @@
 import z from "zod"
 import { spawn } from "child_process"
+import * as fs from "fs/promises"
 import { Tool } from "./tool"
 import path from "path"
 import DESCRIPTION from "./bash.txt"
@@ -28,6 +29,20 @@ const resolveWasm = (asset: string) => {
   if (asset.startsWith("/") || /^[a-z]:/i.test(asset)) return asset
   const url = new URL(asset, import.meta.url)
   return fileURLToPath(url)
+}
+
+const strip = (text: string) => {
+  if (text.length < 2) return text
+  if ((text.startsWith('"') && text.endsWith('"')) || (text.startsWith("'") && text.endsWith("'"))) {
+    return text.slice(1, -1)
+  }
+  return text
+}
+
+async function real(arg: string, cwd: string) {
+  const file = Filesystem.windowsPath(strip(arg))
+  const abs = path.isAbsolute(file) ? file : path.resolve(cwd, file)
+  return fs.realpath(abs).catch(() => abs)
 }
 
 const parser = lazy(async () => {
@@ -116,20 +131,13 @@ export const BashTool = Tool.define("bash", async () => {
         if (["cd", "rm", "cp", "mv", "mkdir", "touch", "chmod", "chown", "cat"].includes(command[0])) {
           for (const arg of command.slice(1)) {
             if (arg.startsWith("-") || (command[0] === "chmod" && arg.startsWith("+"))) continue
-            const resolved = await $`realpath ${arg}`
-              .cwd(cwd)
-              .quiet()
-              .nothrow()
-              .text()
-              .then((x) => x.trim())
+            const resolved = await real(arg, cwd)
             log.info("resolved path", { arg, resolved })
-            if (resolved) {
-              const normalized =
-                process.platform === "win32" ? Filesystem.windowsPath(resolved).replace(/\//g, "\\") : resolved
-              if (!Instance.containsPath(normalized)) {
-                const dir = (await Filesystem.isDir(normalized)) ? normalized : path.dirname(normalized)
-                directories.add(dir)
-              }
+            const normalized =
+              process.platform === "win32" ? Filesystem.windowsPath(resolved).replace(/\//g, "\\") : resolved
+            if (!Instance.containsPath(normalized)) {
+              const dir = (await Filesystem.isDir(normalized)) ? normalized : path.dirname(normalized)
+              directories.add(dir)
             }
           }
         }

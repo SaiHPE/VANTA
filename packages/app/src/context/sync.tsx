@@ -106,7 +106,6 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
     const absolute = (path: string) => (current()[0].path.directory + "/" + path).replace("//", "/")
     const messagePageSize = 200
     const inflight = new Map<string, Promise<void>>()
-    const inflightDiff = new Map<string, Promise<void>>()
     const inflightTodo = new Map<string, Promise<void>>()
     const inflightRunbook = new Map<string, Promise<void>>()
     const inflightVm = new Map<string, Promise<void>>()
@@ -254,19 +253,6 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           })
 
           return runInflight(inflight, key, () => Promise.all([sessionReq, messagesReq]).then(() => {}))
-        },
-        async diff(sessionID: string) {
-          const directory = sdk.directory
-          const client = sdk.client
-          const [store, setStore] = globalSync.child(directory)
-          if (store.session_diff[sessionID] !== undefined) return
-
-          const key = keyFor(directory, sessionID)
-          return runInflight(inflightDiff, key, () =>
-            retry(() => client.session.diff({ sessionID })).then((diff) => {
-              setStore("session_diff", sessionID, reconcile(diff.data ?? [], { key: "file" }))
-            }),
-          )
         },
         async todo(sessionID: string) {
           const directory = sdk.directory

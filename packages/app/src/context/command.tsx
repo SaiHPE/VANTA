@@ -1,4 +1,4 @@
-import { createEffect, createMemo, onCleanup, onMount, type Accessor } from "solid-js"
+import { Suspense, createEffect, createMemo, lazy, onCleanup, onMount, type Accessor } from "solid-js"
 import { createStore } from "solid-js/store"
 import { createSimpleContext } from "@opencode-ai/ui/context"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
@@ -11,7 +11,10 @@ const IS_MAC = typeof navigator === "object" && /(Mac|iPod|iPhone|iPad)/.test(na
 const PALETTE_ID = "command.palette"
 const DEFAULT_PALETTE_KEYBIND = "mod+shift+p"
 const SUGGESTED_PREFIX = "suggested."
-const EDITABLE_KEYBIND_IDS = new Set(["terminal.toggle", "terminal.new", "file.attach"])
+const EDITABLE_KEYBIND_IDS = new Set(["file.attach"])
+const DialogCommandPalette = lazy(() =>
+  import("@/components/dialog-command-palette").then((mod) => ({ default: mod.DialogCommandPalette })),
+)
 
 function actionId(id: string) {
   if (!id.startsWith(SUGGESTED_PREFIX)) return id
@@ -306,7 +309,11 @@ export const { use: useCommand, provider: CommandProvider } = createSimpleContex
     }
 
     const showPalette = () => {
-      run("file.open", "palette")
+      dialog.show(() => (
+        <Suspense>
+          <DialogCommandPalette />
+        </Suspense>
+      ))
     }
 
     const handleKeyDown = (event: KeyboardEvent) => {

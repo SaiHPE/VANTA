@@ -46,7 +46,7 @@ export namespace Project {
         .optional(),
       commands: z
         .object({
-          start: z.string().optional().describe("Startup script to run when creating a new workspace (worktree)"),
+          start: z.string().optional().describe("Startup script to run when preparing the project directory"),
         })
         .optional(),
       time: z.object({

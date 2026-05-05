@@ -4,7 +4,6 @@ import { createEffect, on, Component, Show, onCleanup, Switch, Match, createMemo
 import { createStore } from "solid-js/store"
 import { createFocusSignal } from "@solid-primitives/active-element"
 import { useLocal } from "@/context/local"
-import { selectionFromLines, type SelectedLineRange, useFile } from "@/context/file"
 import {
   ContentPart,
   DEFAULT_PROMPT,
@@ -15,7 +14,6 @@ import {
   AgentPart,
   FileAttachmentPart,
 } from "@/context/prompt"
-import { useLayout } from "@/context/layout"
 import { useSDK } from "@/context/sdk"
 import { useParams } from "@solidjs/router"
 import { useSync } from "@/context/sync"
@@ -34,6 +32,7 @@ import { Persist, persisted } from "@/utils/persist"
 import { usePermission } from "@/context/permission"
 import { useLanguage } from "@/context/language"
 import { usePlatform } from "@/context/platform"
+import { selectionFromLines, type SelectedLineRange } from "@/types/file"
 import { createTextFragment, getCursorPosition, setCursorPosition, setRangeEdge } from "./prompt-input/editor-dom"
 import { createPromptAttachments, ACCEPTED_FILE_TYPES } from "./prompt-input/attachments"
 import {
@@ -56,8 +55,6 @@ import { ImagePreview } from "@opencode-ai/ui/image-preview"
 interface PromptInputProps {
   class?: string
   ref?: (el: HTMLDivElement) => void
-  newSessionWorktree?: string
-  onNewSessionWorktreeReset?: () => void
   onSubmit?: () => void
 }
 
@@ -95,9 +92,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   const sdk = useSDK()
   const sync = useSync()
   const local = useLocal()
-  const files = useFile()
   const prompt = usePrompt()
-  const layout = useLayout()
   const comments = useComments()
   const params = useParams()
   const dialog = useDialog()
@@ -150,76 +145,6 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     requestAnimationFrame(scrollCursorIntoView)
   }
 
-  const sessionKey = createMemo(() => `${params.dir}${params.id ? "/" + params.id : ""}`)
-  const tabs = createMemo(() => layout.tabs(sessionKey))
-  const view = createMemo(() => layout.view(sessionKey))
-
-  const commentInReview = (path: string) => {
-    const sessionID = params.id
-    if (!sessionID) return false
-
-    const diffs = sync.data.session_diff[sessionID]
-    if (!diffs) return false
-    return diffs.some((diff) => diff.file === path)
-  }
-
-  const openComment = (item: { path: string; commentID?: string; commentOrigin?: "review" | "file" }) => {
-    if (!item.commentID) return
-
-    const focus = { file: item.path, id: item.commentID }
-    comments.setActive(focus)
-
-    const queueCommentFocus = (attempts = 6) => {
-      const schedule = (left: number) => {
-        requestAnimationFrame(() => {
-          comments.setFocus({ ...focus })
-          if (left <= 0) return
-          requestAnimationFrame(() => {
-            const current = comments.focus()
-            if (!current) return
-            if (current.file !== focus.file || current.id !== focus.id) return
-            schedule(left - 1)
-          })
-        })
-      }
-
-      schedule(attempts)
-    }
-
-    const wantsReview = item.commentOrigin === "review" || (item.commentOrigin !== "file" && commentInReview(item.path))
-    if (wantsReview) {
-      if (!view().reviewPanel.opened()) view().reviewPanel.open()
-      layout.fileTree.setTab("changes")
-      tabs().setActive("review")
-      queueCommentFocus()
-      return
-    }
-
-    if (!view().reviewPanel.opened()) view().reviewPanel.open()
-    layout.fileTree.setTab("all")
-    const tab = files.tab(item.path)
-    tabs().open(tab)
-    tabs().setActive(tab)
-    Promise.resolve(files.load(item.path)).finally(() => queueCommentFocus())
-  }
-
-  const recent = createMemo(() => {
-    const all = tabs().all()
-    const active = tabs().active()
-    const order = active ? [active, ...all.filter((x) => x !== active)] : all
-    const seen = new Set<string>()
-    const paths: string[] = []
-
-    for (const tab of order) {
-      const path = files.pathFromTab(tab)
-      if (!path) continue
-      if (seen.has(path)) continue
-      seen.add(path)
-      paths.push(path)
-    }
-
-    return paths
-  })
   const info = createMemo(() => (params.id ? sync.session.get(params.id) : undefined))
   const status = createMemo(
     () =>
@@ -497,8 +422,6 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     if (!option) return
     if (option.type === "agent") {
       addPart({ type: "agent", name: option.name, content: "@" + option.name, start: 0, end: 0 })
-    } else {
-      addPart({ type: "file", path: option.path, content: "@" + option.path, start: 0, end: 0 })
     }
   }
 
@@ -516,26 +439,19 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   } = useFilteredList<AtOption>({
     items: async (query) => {
       const agents = agentList()
-      const open = recent()
-      const seen = new Set(open)
-      const pinned: AtOption[] = open.map((path) => ({ type: "file", path, display: path, recent: true }))
-      const paths = await files.searchFilesAndDirectories(query)
-      const fileOptions: AtOption[] = paths
-        .filter((path) => !seen.has(path))
-        .map((path) => ({ type: "file", path, display: path }))
-      return [...agents, ...pinned, ...fileOptions]
+      if (!query) return agents
+      const value = query.toLowerCase()
+      return agents.filter((item) => item.display.toLowerCase().includes(value))
     },
     key: atKey,
     filterKeys: ["display"],
     groupBy: (item) => {
       if (item.type === "agent") return "agent"
-      if (item.recent) return "recent"
       return "file"
     },
     sortGroupsBy: (a, b) => {
       const rank = (category: string) => {
         if (category === "agent") return 0
-        if (category === "recent") return 1
         return 2
       }
       return rank(a.category) - rank(b.category)
@@ -969,8 +885,6 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     },
     setMode: (mode) => setStore("mode", mode),
     setPopover: (popover) => setStore("popover", popover),
-    newSessionWorktree: () => props.newSessionWorktree,
-    onNewSessionWorktreeReset: props.onNewSessionWorktreeReset,
     onSubmit: props.onSubmit,
   })
 
@@ -1158,7 +1072,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
             const active = comments.active()
             return !!item.commentID && item.commentID === active?.id && item.path === active?.file
           }}
-          openComment={openComment}
+          openComment={() => {}}
           remove={(item) => {
             if (item.commentID) comments.remove(item.path, item.commentID)
             prompt.context.remove(item.key)

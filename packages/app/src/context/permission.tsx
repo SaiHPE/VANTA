@@ -160,10 +160,11 @@ export const { use: usePermission, provider: PermissionProvider } = createSimple
     }
 
     const unsubscribe = globalSDK.event.listen((e) => {
-      const event = e.details
+      const event = e.details as { type?: string; properties?: PermissionRequest }
       if (event?.type !== "permission.asked") return
 
       const perm = event.properties
+      if (!perm) return
       if (!shouldAutoRespond(perm, e.name)) return
 
       respondOnce(perm, e.name)
@@ -177,18 +178,6 @@ export const { use: usePermission, provider: PermissionProvider } = createSimple
           draft.autoAccept[key] = true
         }),
       )
-
-      globalSDK.client.permission
-        .list({ directory })
-        .then((x) => {
-          if (!isAutoAcceptingDirectory(directory)) return
-          for (const perm of x.data ?? []) {
-            if (!perm?.id) continue
-            if (!shouldAutoRespond(perm, directory)) continue
-            respondOnce(perm, directory)
-          }
-        })
-        .catch(() => undefined)
     }
 
     function disableDirectory(directory: string) {
@@ -202,26 +191,13 @@ export const { use: usePermission, provider: PermissionProvider } = createSimple
 
     function enable(sessionID: string, directory: string) {
       const key = acceptKey(sessionID, directory)
-      const version = bumpEnableVersion(sessionID, directory)
+      bumpEnableVersion(sessionID, directory)
       setStore(
         produce((draft) => {
           draft.autoAccept[key] = true
           delete draft.autoAccept[sessionID]
         }),
       )
-
-      globalSDK.client.permission
-        .list({ directory })
-        .then((x) => {
-          if (enableVersion.get(key) !== version) return
-          if (!isAutoAccepting(sessionID, directory)) return
-          for (const perm of x.data ?? []) {
-            if (!perm?.id) continue
-            if (!shouldAutoRespond(perm, directory)) continue
-            respondOnce(perm, directory)
-          }
-        })
-        .catch(() => undefined)
     }
 
     function disable(sessionID: string, directory?: string) {

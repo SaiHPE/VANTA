@@ -61,12 +61,15 @@ export function OllamaSetup(props: { dialog?: boolean; onSaved?: () => void }) {
 
   const call = async () => {
     if (!base()) throw new Error("Enter a valid Ollama URL.")
-    const url = new URL("/provider/ollama/models", sdk.url)
-    url.searchParams.set("url", base()!)
-    const res = await fetch(url)
-    const text = await res.text()
-    if (!res.ok) throw new Error(text || "Failed to reach Ollama")
-    return JSON.parse(text) as Item[]
+    const res = await sdk.client.provider.ollama.models(
+      {
+        url: base()!,
+      },
+      {
+        throwOnError: true,
+      },
+    )
+    return res.data as Item[]
   }
 
   const probe = async () => {

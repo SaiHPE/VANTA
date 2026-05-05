@@ -5,7 +5,7 @@ import { useParams } from "@solidjs/router"
 import { Persist, persisted } from "@/utils/persist"
 import { createScopedCache } from "@/utils/scoped-cache"
 import { uuid } from "@/utils/uuid"
-import type { SelectedLineRange } from "@/context/file"
+import type { SelectedLineRange } from "@/types/file"
 
 export type LineComment = {
   id: string

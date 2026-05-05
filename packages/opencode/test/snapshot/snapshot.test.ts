@@ -11,6 +11,21 @@ import { tmpdir } from "../fixture/fixture"
 // with path.join (which produces \ on Windows) then normalizes back to /.
 // This helper does the same for expected values so assertions match cross-platform.
 const fwd = (...parts: string[]) => path.join(...parts).replaceAll("\\", "/")
+const chmodtest = process.platform === "win32" ? test.skip : test
+
+function eperm(err: unknown) {
+  return typeof err === "object" && err !== null && "code" in err && err.code === "EPERM"
+}
+
+async function link(target: string, dest: string, type: "file" | "dir") {
+  try {
+    await fs.symlink(target, dest, type)
+    return true
+  } catch (err) {
+    if (eperm(err)) return false
+    throw err
+  }
+}
 
 async function bootstrap() {
   return tmpdir({
@@ -170,7 +185,7 @@ test("symlink handling", async () => {
       const before = await Snapshot.track()
       expect(before).toBeTruthy()
 
-      await fs.symlink(`${tmp.path}/a.txt`, `${tmp.path}/link.txt`, "file")
+      if (!(await link(`${tmp.path}/a.txt`, `${tmp.path}/link.txt`, "file"))) return
 
       expect((await Snapshot.patch(before!)).files).toContain(fwd(tmp.path, "link.txt"))
     },
@@ -442,8 +457,8 @@ test("nested symlinks", async () => {
 
       await $`mkdir -p ${tmp.path}/sub/dir`.quiet()
       await Filesystem.write(`${tmp.path}/sub/dir/target.txt`, "target content")
-      await fs.symlink(`${tmp.path}/sub/dir/target.txt`, `${tmp.path}/sub/dir/link.txt`, "file")
-      await fs.symlink(`${tmp.path}/sub`, `${tmp.path}/sub-link`, "dir")
+      if (!(await link(`${tmp.path}/sub/dir/target.txt`, `${tmp.path}/sub/dir/link.txt`, "file"))) return
+      if (!(await link(`${tmp.path}/sub`, `${tmp.path}/sub-link`, "dir"))) return
 
       const patch = await Snapshot.patch(before!)
       expect(patch.files).toContain(fwd(tmp.path, "sub", "dir", "link.txt"))
@@ -452,7 +467,7 @@ test("nested symlinks", async () => {
   })
 })
 
-test("file permissions and ownership changes", async () => {
+chmodtest("file permissions and ownership changes", async () => {
   await using tmp = await bootstrap()
   await Instance.provide({
     directory: tmp.path,
@@ -460,14 +475,11 @@ test("file permissions and ownership changes", async () => {
       const before = await Snapshot.track()
       expect(before).toBeTruthy()
 
-      // Change permissions multiple times
-      await $`chmod 600 ${tmp.path}/a.txt`.quiet()
-      await $`chmod 755 ${tmp.path}/a.txt`.quiet()
-      await $`chmod 644 ${tmp.path}/a.txt`.quiet()
+      await fs.chmod(`${tmp.path}/a.txt`, 0o600)
+      await fs.chmod(`${tmp.path}/a.txt`, 0o755)
+      await fs.chmod(`${tmp.path}/a.txt`, 0o644)
 
       const patch = await Snapshot.patch(before!)
-      // Note: git doesn't track permission changes on existing files by default
-      // Only tracks executable bit when files are first added
       expect(patch.files.length).toBe(0)
     },
   })

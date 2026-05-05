@@ -20,11 +20,9 @@ import { Command } from "../command"
 import { Global } from "../global"
 import { ProjectRoutes } from "./routes/project"
 import { SessionRoutes } from "./routes/session"
-import { PtyRoutes } from "./routes/pty"
 import { McpRoutes } from "./routes/mcp"
 import { FileRoutes } from "./routes/file"
 import { ConfigRoutes } from "./routes/config"
-import { ExperimentalRoutes } from "./routes/experimental"
 import { ProviderRoutes } from "./routes/provider"
 import { lazy } from "../util/lazy"
 import { InstanceBootstrap } from "../project/bootstrap"
@@ -34,7 +32,7 @@ import { websocket } from "hono/bun"
 import { HTTPException } from "hono/http-exception"
 import { errors } from "./error"
 import { QuestionRoutes } from "./routes/question"
-import { PermissionRoutes } from "./routes/permission"
+
 import { GlobalRoutes } from "./routes/global"
 import { MDNS } from "./mdns"
 import { VmRoutes } from "./routes/vm"
@@ -69,7 +67,6 @@ export namespace Server {
             let status: ContentfulStatusCode
             if (err instanceof NotFoundError) status = 404
             else if (err instanceof Provider.ModelNotFoundError) status = 400
-            else if (err.name.startsWith("Worktree")) status = 400
             else status = 500
             return c.json(err.toObject(), { status })
           }
@@ -169,11 +166,8 @@ export namespace Server {
         .route("/project", ProjectRoutes())
         .route("/vm", VmRoutes())
         .route("/runbook", RunbookRoutes())
-        .route("/pty", PtyRoutes())
         .route("/config", ConfigRoutes())
-        .route("/experimental", ExperimentalRoutes())
         .route("/session", SessionRoutes())
-        .route("/permission", PermissionRoutes())
         .route("/question", QuestionRoutes())
         .route("/provider", ProviderRoutes())
         .route("/", FileRoutes())

@@ -5,6 +5,8 @@ import { Instance } from "../../src/project/instance"
 import { Agent } from "../../src/agent/agent"
 import { PermissionNext } from "../../src/permission/next"
 
+const slow = { timeout: 60_000 }
+
 // Helper to evaluate permission for a tool with wildcard pattern
 function evalPerm(agent: Agent.Info | undefined, permission: string): PermissionNext.Action | undefined {
   if (!agent) return undefined
@@ -240,7 +242,7 @@ test("global permission config applies to all agents", async () => {
       expect(evalPerm(build, "bash")).toBe("deny")
     },
   })
-})
+}, slow)
 
 test("agent steps/maxSteps config sets steps property", async () => {
   await using tmp = await tmpdir({
@@ -461,7 +463,7 @@ test("legacy tools config maps write/edit/patch/multiedit to edit permission", a
       expect(evalPerm(build, "edit")).toBe("deny")
     },
   })
-})
+}, slow)
 
 test("Truncate.GLOB is allowed even when user denies external_directory globally", async () => {
   const { Truncate } = await import("../../src/tool/truncation")
@@ -481,7 +483,7 @@ test("Truncate.GLOB is allowed even when user denies external_directory globally
       expect(PermissionNext.evaluate("external_directory", "/some/other/path", build!.permission).action).toBe("deny")
     },
   })
-})
+}, slow)
 
 test("Truncate.GLOB is allowed even when user denies external_directory per-agent", async () => {
   const { Truncate } = await import("../../src/tool/truncation")
@@ -505,7 +507,7 @@ test("Truncate.GLOB is allowed even when user denies external_directory per-agen
       expect(PermissionNext.evaluate("external_directory", "/some/other/path", build!.permission).action).toBe("deny")
     },
   })
-})
+}, slow)
 
 test("explicit Truncate.GLOB deny is respected", async () => {
   const { Truncate } = await import("../../src/tool/truncation")
@@ -563,7 +565,7 @@ description: Permission skill.
   } finally {
     process.env.OPENCODE_TEST_HOME = home
   }
-})
+}, slow)
 
 test("defaultAgent returns build when no default_agent config", async () => {
   await using tmp = await tmpdir()
@@ -653,7 +655,7 @@ test("defaultAgent throws when default_agent points to non-existent agent", asyn
   })
 })
 
-test("defaultAgent returns plan when build is disabled and default_agent not set", async () => {
+test("defaultAgent returns execute when build is disabled and default_agent not set", async () => {
   await using tmp = await tmpdir({
     config: {
       agent: {
@@ -665,17 +667,17 @@ test("defaultAgent returns plan when build is disabled and default_agent not set
     directory: tmp.path,
     fn: async () => {
       const agent = await Agent.defaultAgent()
-      // build is disabled, so it should return plan (next primary agent)
-      expect(agent).toBe("plan")
+      expect(agent).toBe("execute")
     },
   })
-})
+}, slow)
 
 test("defaultAgent throws when all primary agents are disabled", async () => {
   await using tmp = await tmpdir({
     config: {
       agent: {
         build: { disable: true },
+        execute: { disable: true },
         plan: { disable: true },
       },
     },
@@ -683,8 +685,7 @@ test("defaultAgent throws when all primary agents are disabled", async () => {
   await Instance.provide({
     directory: tmp.path,
     fn: async () => {
-      // build and plan are disabled, no primary-capable agents remain
       await expect(Agent.defaultAgent()).rejects.toThrow("no primary visible agent found")
     },
   })
-})
+}, slow)

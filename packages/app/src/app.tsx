@@ -11,18 +11,15 @@ import { BaseRouterProps, Navigate, Route, Router } from "@solidjs/router"
 import { Component, ErrorBoundary, type JSX, lazy, type ParentProps, Show, Suspense } from "solid-js"
 import { CommandProvider } from "@/context/command"
 import { CommentsProvider } from "@/context/comments"
-import { FileProvider } from "@/context/file"
 import { GlobalSDKProvider } from "@/context/global-sdk"
 import { GlobalSyncProvider } from "@/context/global-sync"
 import { LanguageProvider, useLanguage } from "@/context/language"
-import { LayoutProvider } from "@/context/layout"
 import { ModelsProvider } from "@/context/models"
 import { NotificationProvider } from "@/context/notification"
 import { PermissionProvider } from "@/context/permission"
 import { PromptProvider } from "@/context/prompt"
 import { type ServerConnection, ServerProvider, useServer } from "@/context/server"
 import { SettingsProvider } from "@/context/settings"
-import { TerminalProvider } from "@/context/terminal"
 import DirectoryLayout from "@/pages/directory-layout"
 import Layout from "@/pages/layout"
 import { ErrorPage } from "./pages/error"
@@ -71,15 +68,13 @@ function AppShellProviders(props: ParentProps) {
   return (
     <SettingsProvider>
       <PermissionProvider>
-        <LayoutProvider>
-          <NotificationProvider>
-            <ModelsProvider>
-              <CommandProvider>
-                <Layout>{props.children}</Layout>
-              </CommandProvider>
-            </ModelsProvider>
-          </NotificationProvider>
-        </LayoutProvider>
+        <NotificationProvider>
+          <ModelsProvider>
+            <CommandProvider>
+              <Layout>{props.children}</Layout>
+            </CommandProvider>
+          </ModelsProvider>
+        </NotificationProvider>
       </PermissionProvider>
     </SettingsProvider>
   )
@@ -87,13 +82,9 @@ function AppShellProviders(props: ParentProps) {
 
 function SessionProviders(props: ParentProps) {
   return (
-    <TerminalProvider>
-      <FileProvider>
-        <PromptProvider>
-          <CommentsProvider>{props.children}</CommentsProvider>
-        </PromptProvider>
-      </FileProvider>
-    </TerminalProvider>
+    <PromptProvider>
+      <CommentsProvider>{props.children}</CommentsProvider>
+    </PromptProvider>
   )
 }
 

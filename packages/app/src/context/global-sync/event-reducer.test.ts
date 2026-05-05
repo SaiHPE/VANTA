@@ -71,7 +71,6 @@ const baseState = (input: Partial<State> = {}) =>
     session: [],
     sessionTotal: 0,
     session_status: {},
-    session_diff: {},
     todo: {},
     permission: {},
     question: {},
@@ -173,7 +172,6 @@ describe("applyDirectoryEvent", () => {
         sessionTotal: 2,
         message: { ses_1: [message] },
         part: { [message.id]: [textPart("prt_1", "ses_1", message.id)] },
-        session_diff: { ses_1: [] },
         todo: { ses_1: [] },
         permission: { ses_1: [] },
         question: { ses_1: [] },
@@ -194,7 +192,6 @@ describe("applyDirectoryEvent", () => {
     expect(store.sessionTotal).toBe(1)
     expect(store.message.ses_1).toBeUndefined()
     expect(store.part[message.id]).toBeUndefined()
-    expect(store.session_diff.ses_1).toBeUndefined()
     expect(store.todo.ses_1).toBeUndefined()
     expect(store.permission.ses_1).toBeUndefined()
     expect(store.question.ses_1).toBeUndefined()
@@ -219,7 +216,6 @@ describe("applyDirectoryEvent", () => {
           sessionTotal: 2,
           message: { [item.info.id]: [message] },
           part: { [message.id]: [textPart("prt_1", item.info.id, message.id)] },
-          session_diff: { [item.info.id]: [] },
           todo: { [item.info.id]: [] },
           permission: { [item.info.id]: [] },
           question: { [item.info.id]: [] },
@@ -240,7 +236,6 @@ describe("applyDirectoryEvent", () => {
       expect(store.sessionTotal).toBe(item.expectedTotal)
       expect(store.message[item.info.id]).toBeUndefined()
       expect(store.part[message.id]).toBeUndefined()
-      expect(store.session_diff[item.info.id]).toBeUndefined()
       expect(store.todo[item.info.id]).toBeUndefined()
       expect(store.permission[item.info.id]).toBeUndefined()
       expect(store.question[item.info.id]).toBeUndefined()

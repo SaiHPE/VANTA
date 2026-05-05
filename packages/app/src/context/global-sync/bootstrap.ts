@@ -1,7 +1,6 @@
 import type {
   Config,
   Path,
-  PermissionRequest,
   Project,
   ProviderListResponse,
   QuestionRequest,
@@ -163,30 +162,6 @@ export async function bootstrapDirectory(input: {
       const next = x.data ?? input.store.vcs
       input.setStore("vcs", next)
       if (next?.branch) input.vcsCache.setStore("value", next)
-    }),
-    input.sdk.permission.list().then((x: { data?: PermissionRequest[] }) => {
-      const grouped = groupBySession(
-        (x.data ?? []).filter(
-          (perm): perm is PermissionRequest =>
-            !!perm?.id && !!perm.sessionID && !!perm.permission && Array.isArray(perm.patterns),
-        ),
-      )
-      batch(() => {
-        for (const sessionID of Object.keys(input.store.permission)) {
-          if (grouped[sessionID]) continue
-          input.setStore("permission", sessionID, [])
-        }
-        for (const [sessionID, permissions] of Object.entries(grouped)) {
-          input.setStore(
-            "permission",
-            sessionID,
-            reconcile(
-              permissions.sort((a, b) => cmp(a.id, b.id)),
-              { key: "id" },
-            ),
-          )
-        }
-      })
     }),
     input.sdk.question.list().then((x: { data?: QuestionRequest[] }) => {
       const grouped = groupBySession(

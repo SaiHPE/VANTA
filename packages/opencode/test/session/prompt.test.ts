@@ -15,9 +15,16 @@ describe("session.prompt missing file", () => {
     await using tmp = await tmpdir({
       git: true,
       config: {
+        provider: {
+          ollama: {
+            models: {
+              "qwen3:8b": {},
+            },
+          },
+        },
         agent: {
           build: {
-            model: "openai/gpt-5.2",
+            model: "ollama/qwen3:8b",
           },
         },
       },
@@ -60,9 +67,16 @@ describe("session.prompt missing file", () => {
     await using tmp = await tmpdir({
       git: true,
       config: {
+        provider: {
+          ollama: {
+            models: {
+              "qwen3:8b": {},
+            },
+          },
+        },
         agent: {
           build: {
-            model: "openai/gpt-5.2",
+            model: "ollama/qwen3:8b",
           },
         },
       },
@@ -111,6 +125,16 @@ describe("session.prompt special characters", () => {
   test("handles filenames with # character", async () => {
     await using tmp = await tmpdir({
       git: true,
+      config: {
+        model: "ollama/qwen3:8b",
+        provider: {
+          ollama: {
+            models: {
+              "qwen3:8b": {},
+            },
+          },
+        },
+      },
       init: async (dir) => {
         await Bun.write(path.join(dir, "file#name.txt"), "special content\n")
       },
@@ -149,63 +173,72 @@ describe("session.prompt special characters", () => {
 
 describe("session.prompt agent variant", () => {
   test("applies agent variant only when using agent model", async () => {
-    const prev = process.env.OPENAI_API_KEY
-    process.env.OPENAI_API_KEY = "test-openai-key"
-
-    try {
-      await using tmp = await tmpdir({
-        git: true,
-        config: {
-          agent: {
-            build: {
-              model: "openai/gpt-5.2",
-              variant: "xhigh",
+    await using tmp = await tmpdir({
+      git: true,
+      config: {
+        provider: {
+          ollama: {
+            models: {
+              "qwen3:8b": {
+                variants: {
+                  xhigh: {
+                    reasoning: {
+                      effort: "high",
+                    },
+                  },
+                },
+              },
+              "llama3.2": {},
             },
           },
         },
-      })
-
-      await Instance.provide({
-        directory: tmp.path,
-        fn: async () => {
-          const session = await Session.create({})
-
-          const other = await SessionPrompt.prompt({
-            sessionID: session.id,
+        agent: {
+          build: {
             agent: "build",
-            model: { providerID: "opencode", modelID: "kimi-k2.5-free" },
-            noReply: true,
-            parts: [{ type: "text", text: "hello" }],
-          })
-          if (other.info.role !== "user") throw new Error("expected user message")
-          expect(other.info.variant).toBeUndefined()
-
-          const match = await SessionPrompt.prompt({
-            sessionID: session.id,
-            agent: "build",
-            noReply: true,
-            parts: [{ type: "text", text: "hello again" }],
-          })
-          if (match.info.role !== "user") throw new Error("expected user message")
-          expect(match.info.model).toEqual({ providerID: "openai", modelID: "gpt-5.2" })
-          expect(match.info.variant).toBe("xhigh")
-
-          const override = await SessionPrompt.prompt({
-            sessionID: session.id,
-            agent: "build",
-            noReply: true,
-            variant: "high",
-            parts: [{ type: "text", text: "hello third" }],
-          })
-          if (override.info.role !== "user") throw new Error("expected user message")
-          expect(override.info.variant).toBe("high")
-
-          await Session.remove(session.id)
+            model: "ollama/qwen3:8b",
+            variant: "xhigh",
+          },
         },
-      })
-    } finally {
-      if (prev === undefined) delete process.env.OPENAI_API_KEY
-      else process.env.OPENAI_API_KEY = prev
-    }
+      },
+    })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const session = await Session.create({})
+
+        const other = await SessionPrompt.prompt({
+          sessionID: session.id,
+          agent: "build",
+          model: { providerID: "ollama", modelID: "llama3.2" },
+          noReply: true,
+          parts: [{ type: "text", text: "hello" }],
+        })
+        if (other.info.role !== "user") throw new Error("expected user message")
+        expect(other.info.variant).toBeUndefined()
+
+        const match = await SessionPrompt.prompt({
+          sessionID: session.id,
+          agent: "build",
+          noReply: true,
+          parts: [{ type: "text", text: "hello again" }],
+        })
+        if (match.info.role !== "user") throw new Error("expected user message")
+        expect(match.info.model).toEqual({ providerID: "ollama", modelID: "qwen3:8b" })
+        expect(match.info.variant).toBe("xhigh")
+
+        const override = await SessionPrompt.prompt({
+          sessionID: session.id,
+          agent: "build",
+          noReply: true,
+          variant: "high",
+          parts: [{ type: "text", text: "hello third" }],
+        })
+        if (override.info.role !== "user") throw new Error("expected user message")
+        expect(override.info.variant).toBe("high")
+
+        await Session.remove(session.id)
+      },
+    })
   })
 })

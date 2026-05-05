@@ -12,7 +12,6 @@ import { base64Encode } from "@opencode-ai/util/encode"
 import { decode64 } from "@/utils/base64"
 import { EventSessionError } from "@opencode-ai/sdk/v2"
 import { Persist, persisted } from "@/utils/persist"
-import { playSound, soundSrc } from "@/utils/sound"
 
 type NotificationBase = {
   directory?: string
@@ -233,10 +232,6 @@ export const { use: useNotification, provider: NotificationProvider } = createSi
         if (!session) return
         if (session.parentID) return
 
-        if (settings.sounds.agentEnabled()) {
-          playSound(soundSrc(settings.sounds.agent()))
-        }
-
         append({
           directory,
           time,
@@ -261,10 +256,6 @@ export const { use: useNotification, provider: NotificationProvider } = createSi
       void lookup(directory, sessionID).then((session) => {
         if (meta.disposed) return
         if (session?.parentID) return
-
-        if (settings.sounds.errorsEnabled()) {
-          playSound(soundSrc(settings.sounds.errors()))
-        }
 
         const error = "error" in event.properties ? event.properties.error : undefined
         append({

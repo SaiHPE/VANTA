@@ -7,11 +7,13 @@ import { showToast } from "@opencode-ai/ui/toast"
 import type { QuestionAnswer, QuestionRequest } from "@opencode-ai/sdk/v2"
 import { useLanguage } from "@/context/language"
 import { useSDK } from "@/context/sdk"
+import { useSync } from "@/context/sync"
 
 const cache = new Map<string, { tab: number; answers: QuestionAnswer[]; custom: string[]; customOn: boolean[] }>()
 
 export const SessionQuestionDock: Component<{ request: QuestionRequest; onSubmit: () => void }> = (props) => {
   const sdk = useSDK()
+  const sync = useSync()
   const language = useLanguage()
 
   const questions = createMemo(() => props.request.questions)
@@ -126,6 +128,16 @@ export const SessionQuestionDock: Component<{ request: QuestionRequest; onSubmit
     showToast({ title: language.t("common.requestFailed"), description: message })
   }
 
+  const clear = () => {
+    sync.set("question", props.request.sessionID, (list: QuestionRequest[] = []) => {
+      const idx = list.findIndex((item) => item.id === props.request.id)
+      if (idx < 0) return list
+      const next = [...list]
+      next.splice(idx, 1)
+      return next
+    })
+  }
+
   const reply = async (answers: QuestionAnswer[]) => {
     if (store.sending) return
 
@@ -135,6 +147,7 @@ export const SessionQuestionDock: Component<{ request: QuestionRequest; onSubmit
       await sdk.client.question.reply({ requestID: props.request.id, answers })
       replied = true
       cache.delete(props.request.id)
+      clear()
     } catch (err) {
       fail(err)
     } finally {
@@ -151,6 +164,7 @@ export const SessionQuestionDock: Component<{ request: QuestionRequest; onSubmit
       await sdk.client.question.reject({ requestID: props.request.id })
       replied = true
       cache.delete(props.request.id)
+      clear()
     } catch (err) {
       fail(err)
     } finally {

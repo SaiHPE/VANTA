@@ -1,7 +1,6 @@
 import { createMemo, For, Match, Switch } from "solid-js"
 import { Button } from "@opencode-ai/ui/button"
 import { Logo } from "@opencode-ai/ui/logo"
-import { useLayout } from "@/context/layout"
 import { useNavigate } from "@solidjs/router"
 import { base64Encode } from "@opencode-ai/util/encode"
 import { Icon } from "@opencode-ai/ui/icon"
@@ -12,10 +11,10 @@ import { DialogSelectDirectory } from "@/components/dialog-select-directory"
 import { useServer } from "@/context/server"
 import { useGlobalSync } from "@/context/global-sync"
 import { useLanguage } from "@/context/language"
+import { validProject } from "@/context/global-sync/utils"
 
 export default function Home() {
   const sync = useGlobalSync()
-  const layout = useLayout()
   const platform = usePlatform()
   const dialog = useDialog()
   const navigate = useNavigate()
@@ -24,6 +23,7 @@ export default function Home() {
   const homedir = createMemo(() => sync.data.path.home)
   const recent = createMemo(() => {
     return sync.data.project
+      .filter(validProject)
       .slice()
       .sort((a, b) => (b.time.updated ?? b.time.created) - (a.time.updated ?? a.time.created))
       .slice(0, 5)
@@ -37,7 +37,7 @@ export default function Home() {
   })
 
   function openProject(directory: string) {
-    layout.projects.open(directory)
+    server.projects.open(directory)
     server.projects.touch(directory)
     navigate(`/${base64Encode(directory)}`)
   }
